@@ -9,9 +9,8 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 -- Load Syde
 local syde = loadstring(game:HttpGet("https://raw.githubusercontent.com/essencejs/syde/refs/heads/main/source", true))()
 
--- Config Customization Setup
+-- Branding Customization (Removed the default image asset that caused the Autofarm logo)
 syde:Load({
-    Logo = "7488932274",
     Name = "Adaptive Aimbot",
     Status = "Stable",
     Accent = Color3.fromRGB(54, 57, 241),
@@ -1292,6 +1291,7 @@ end
 local function addButton(tab, title, description, callback)
     if not tab then return nil end
     local method = tab.Button or tab.AddButton or tab.CreateButton
+    if not method then return nil end
     return method(tab, {
         Title = title,
         Description = description or "",
@@ -1303,6 +1303,7 @@ end
 local function addKeybind(tab, title, key, callback)
     if not tab then return nil end
     local method = tab.Keybind or tab.AddKeybind or tab.CreateKeybind
+    if not method then return nil end
     return method(tab, {
         Title = title,
         Key = key,
@@ -1313,6 +1314,7 @@ end
 local function addSection(tab, title, icon)
     if not tab then return nil end
     local method = tab.Section or tab.AddSection or tab.CreateSection
+    if not method then return nil end
     return method(tab, title, icon)
 end
 
