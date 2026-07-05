@@ -134,6 +134,9 @@ local Config = {
     -- Target indicator
     ShowTargetIndicator = true,
     TargetIndicatorSize = 20,
+    TargetIndicatorThickness = 2,
+    TargetIndicatorFilled = false,
+    TargetIndicatorTransparency = 1.0,
     TargetIndicatorColor = Color3.fromRGB(54, 57, 241),
 
     -- Silent Aim Visualizer
@@ -205,6 +208,13 @@ local Config = {
     WatermarkText = "Adaptive Aimbot",
     CloudConfigCode = "",
 }
+
+-- Global Scope Targeting State (Corrects variables shadowed by internal local blocks) [1]
+local cachedClosestPart = nil
+local lastTarget = nil
+local lockStartTime = 0
+local reactionTargetTime = 0
+local autoShootNext = 0
 
 -- Safe Drawing Constructor (Prevents script halt if Drawing API is unsupported)
 local function safeCreateDrawing(class, props)
@@ -495,30 +505,6 @@ local function getClosestPlayer()
         end
     end
     return closestPart
-end
-
--- Load Config logic dynamically assigned
-local function loadConfig(name)
-    local allData = readRawConfigs()
-    local data = allData[name]
-    if data then
-        for k, v in pairs(data) do
-            local deserialized = deserializeValue(v)
-            Config[k] = deserialized
-        end
-        
-        -- Cache configuration name as the last configuration loaded
-        if isFileSystemSupported then
-            pcall(writefile, LAST_CONFIG_FILE, name)
-        end
-        
-        -- Apply immediate reactive settings
-        updateFOV()
-        updateAntiAim()
-        applyLightingSettings()
-        return true
-    end
-    return false
 end
 
 -- Cubic Bezier Math Curve calculation
@@ -996,10 +982,6 @@ local function isAimingHeld()
 end
 
 -- Render Loop Updates & FPS Calculations (Restored precise Cascade tracking mathematics)
-local cachedClosestPart = nil
-local lastTarget = nil
-local lockStartTime = 0
-local reactionTargetTime = 0
 local lastFpsTime = tick()
 
 RunService.RenderStepped:Connect(function()
@@ -1232,7 +1214,7 @@ RunService.RenderStepped:Connect(function()
         if fovCircle then fovCircle.Visible = false end
     end
 
-    -- Target indicator
+    -- Target indicator [2]
     if Config.ShowTargetIndicator and cachedClosestPart and targetBox then
         local pos, onScreen = getPositionOnScreen(cachedClosestPart.Position)
         if onScreen then
@@ -1240,6 +1222,9 @@ RunService.RenderStepped:Connect(function()
             targetBox.Position = pos - Vector2.new(Config.TargetIndicatorSize / 2, Config.TargetIndicatorSize / 2)
             targetBox.Color = Config.TargetIndicatorColor
             targetBox.Size = Vector2.new(Config.TargetIndicatorSize, Config.TargetIndicatorSize)
+            targetBox.Thickness = Config.TargetIndicatorThickness
+            targetBox.Filled = Config.TargetIndicatorFilled
+            targetBox.Transparency = Config.TargetIndicatorTransparency
         else
             targetBox.Visible = false
         end
@@ -1302,7 +1287,6 @@ local function addSliders(tab, title, description, slidersData)
         warn("[Syde UI error] " .. tostring(title) .. ": Slider method not found")
         return nil 
     end
-    
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1311,32 +1295,20 @@ local function addSliders(tab, title, description, slidersData)
         })
     end)
     
-    if success then return result end
-    
-    -- Fallback: If CreateSlider failed (e.g. singular Slider API), add them individually
-    for _, s in ipairs(slidersData) do
-        local singleMethod = tab.Slider or tab.AddSlider or tab.CreateSlider
-        if singleMethod then
-            pcall(function()
-                singleMethod(tab, {
-                    Title = s.Title,
-                    Description = description or "",
-                    Range = s.Range,
-                    Increment = s.Increment,
-                    StarterValue = s.StarterValue,
-                    Flag = s.Flag,
-                    CallBack = s.CallBack
-                })
-            end)
-        end
+    if not success then
+        warn("[Syde UI error] " .. tostring(title) .. ": " .. tostring(result))
+        return nil
     end
-    return nil
+    return result
 end
 
 local function addDropdown(tab, title, options, placeholder, multi, callback)
     if not tab then return nil end
     local method = tab.Dropdown or tab.AddDropdown or tab.CreateDropdown
-    if not method then return nil end
+    if not method then 
+        warn("[Syde UI error] " .. tostring(title) .. ": Dropdown method not found")
+        return nil 
+    end
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1485,6 +1457,11 @@ addSection(CombatTab, "Combat Framework Switch")
 addToggle(CombatTab, "Aimbot Enabled", "Activate master lock-on mechanics.", Config.AimbotEnabled, "AimbotEnabled", function(v) Config.AimbotEnabled = v end)
 addToggle(CombatTab, "Silent Aim Enabled", "Redirects server-side shoot vectors natively.", Config.SilentAimEnabled, "SilentAimEnabled", function(v) Config.SilentAimEnabled = v end)
 addToggle(CombatTab, "Hold To Aim", "Require manual tracking keys to be pressed.", Config.HoldToAim, "HoldToAim", function(v) Config.HoldToAim = v end)
+
+-- Target filtering options (Teamcheck and Visible check toggles) [1]
+addSection(CombatTab, "Target Checks & Filters")
+addToggle(CombatTab, "Team Check", "Bypasses teammates during targeting scans.", Config.TeamCheck, "TeamCheck", function(v) Config.TeamCheck = v end)
+addToggle(CombatTab, "Visible Check", "Only lock on players who are fully visible.", Config.VisibleCheck, "VisibleCheck", function(v) Config.VisibleCheck = v end)
 
 addSection(CombatTab, "Fine-Tuning & Prediction")
 addToggle(CombatTab, "Target Velocity Prediction", "Calibrates distance/velocity trajectories.", Config.Prediction, "Prediction", function(v) Config.Prediction = v end)
@@ -1643,8 +1620,38 @@ addSliders(VisualsTab, "FOV Parameters", "Modify boundary range limits.", {
 })
 addColorPicker(VisualsTab, "FOV Outline Color", "Change boundary color shade.", Config.FOVColor, "FOVColorFlag", function(c) Config.FOVColor = c end)
 
+-- Customization of target and silent trackers (Target Indicator Box customizations) [2]
 addSection(VisualsTab, "Target & Silent Trackers")
 addToggle(VisualsTab, "Show Selected Target Indicator Box", "Highlights tracked enemy visually.", Config.ShowTargetIndicator, "ShowTargetIndicator", function(v) Config.ShowTargetIndicator = v end)
+addToggle(VisualsTab, "Target Indicator Filled", "Apply solid color shading into target indicator bounds.", Config.TargetIndicatorFilled, "TargetIndicatorFilled", function(v) Config.TargetIndicatorFilled = v end)
+addSliders(VisualsTab, "Target Indicator Design Limits", "Customizations for target indicators.", {
+    {
+        Title = "Indicator Box Size",
+        Range = {5, 100},
+        Increment = 1,
+        StarterValue = Config.TargetIndicatorSize,
+        Flag = "TargetIndicatorSize",
+        CallBack = function(v) Config.TargetIndicatorSize = v end
+    },
+    {
+        Title = "Indicator Outline Thickness",
+        Range = {1, 10},
+        Increment = 1,
+        StarterValue = Config.TargetIndicatorThickness,
+        Flag = "TargetIndicatorThickness",
+        CallBack = function(v) Config.TargetIndicatorThickness = v end
+    },
+    {
+        Title = "Indicator Transparency (%)",
+        Range = {0, 100},
+        Increment = 5,
+        StarterValue = math.floor(Config.TargetIndicatorTransparency * 100),
+        Flag = "TargetIndicatorTransparency",
+        CallBack = function(v) Config.TargetIndicatorTransparency = v / 100 end
+    }
+})
+addColorPicker(VisualsTab, "Target Indicator Box Color", "Visual target box outline color shade.", Config.TargetIndicatorColor, "TargetIndicatorColorFlag", function(c) Config.TargetIndicatorColor = c end)
+
 addToggle(VisualsTab, "Show Silent Aim Tracking Point Dot", "Pointers where silent bullets are heading.", Config.SilentVisualizerEnabled, "SilentVisualizerEnabled", function(v) Config.SilentVisualizerEnabled = v end)
 
 addSection(VisualsTab, "Minimap Radar Hack")
