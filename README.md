@@ -2,6 +2,11 @@
 
 A collection of Roblox-related scripts, utilities, UI projects, experiments, and learning resources.
 
+## RUN THIS FOR MAIN HUB
+
+```
+loadstring(game:HttpGet("https://github.com/richijsLV/Scripts/raw/refs/heads/main/MainHub.lua"))()
+```
 ## Contents
 
 This repository may include:
