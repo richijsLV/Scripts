@@ -236,12 +236,10 @@ end)
 -- ==========================================
 -- GAME SPECIFIC HUB TAB
 -- ==========================================
--- ==========================================
--- GAME SPECIFIC HUB TAB
--- ==========================================
+
 addSection(GameSpecificTab, "Game Specific Scripts")
 
-addButton(GameSpecificTab, "DripStealer", "Can change Avatar", function()
+addButton(GameSpecificTab, "DripStealer", "Copy people's avatars. ONLY for the game *Vibe Place*", function()
     local success, err = pcall(function()
         loadstring(game:HttpGet("https://github.com/richijsLV/Scripts/raw/refs/heads/main/Universal/DripStealer.lua"))()
     end)
@@ -263,11 +261,6 @@ GameSpecificTab:Paragraph({
 -- ==========================================
 -- SETTINGS TAB
 -- ==========================================
-
-addSection(SettingsTab, "App Control Binds")
-addKeybind(SettingsTab, "UI Open/Minimize Key", Config.UiToggleKey, function()
-    Window.Minimized = not Window.Minimized
-end)
 
 SettingsTab:Paragraph({
     Title = "Rixware Hub",
