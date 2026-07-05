@@ -186,7 +186,6 @@ local Config = {
 }
 
 -- Performance Indicators
-local lastFps = 60
 local statsInstance = game:GetService("Stats")
 
 -- Custom Screen Drawing Instances
@@ -289,6 +288,9 @@ local function generateCloudCode()
     if setclipboard then
         setclipboard(code)
         notify("Sync Generated", "Loadout config code copied to clipboard.", 3)
+    else
+        print("Shareable Loadout Code:", code)
+        notify("Sync Generated", "Loadout code printed to output (Unsupported Executor).", 3)
     end
     return code
 end
@@ -1206,6 +1208,114 @@ RunService.RenderStepped:Connect(function()
     updateRadar()
 end)
 
+-- Safe UI API Wrappers to dynamically adjust across Syde updates
+local function addToggle(tab, title, description, defaultValue, flag, callback)
+    if not tab then return nil end
+    local method = tab.Toggle or tab.AddToggle or tab.CreateToggle
+    if not method then return nil end
+    return method(tab, {
+        Title = title,
+        Description = description or "",
+        Value = defaultValue or false,
+        Config = true,
+        Flag = flag,
+        CallBack = callback
+    })
+end
+
+local function addSliders(tab, title, description, slidersData)
+    if not tab then return nil end
+    local method = tab.CreateSlider or tab.Slider or tab.AddSlider or tab.SliderGroup or tab.CreateSliders
+    if not method then return nil end
+    if method == tab.Slider or method == tab.AddSlider then
+        for _, s in ipairs(slidersData) do
+            pcall(function()
+                method(tab, {
+                    Title = s.Title,
+                    Description = description or "",
+                    Range = s.Range,
+                    Increment = s.Increment,
+                    StarterValue = s.StarterValue,
+                    Flag = s.Flag,
+                    CallBack = s.CallBack
+                })
+            end)
+        end
+        return nil
+    end
+    return method(tab, {
+        Title = title,
+        Description = description or "",
+        Sliders = slidersData
+    })
+end
+
+local function addDropdown(tab, title, options, placeholder, multi, callback)
+    if not tab then return nil end
+    local method = tab.Dropdown or tab.AddDropdown or tab.CreateDropdown
+    if not method then return nil end
+    return method(tab, {
+        Title = title,
+        Options = options,
+        PlaceHolder = placeholder or "Select...",
+        Multi = multi or false,
+        CallBack = callback
+    })
+end
+
+local function addColorPicker(tab, title, description, defaultColor, flag, callback)
+    if not tab then return nil end
+    local method = tab.ColorPicker or tab.AddColorPicker or tab.CreateColorPicker
+    if not method then return nil end
+    return method(tab, {
+        Title = title,
+        Description = description or "",
+        Linkable = false,
+        Color = defaultColor,
+        Flag = flag,
+        CallBack = callback
+    })
+end
+
+local function addTextInput(tab, title, placeholder, maxSize, callback)
+    if not tab then return nil end
+    local method = tab.TextInput or tab.AddTextInput or tab.CreateTextInput or tab.Input
+    if not method then return nil end
+    return method(tab, {
+        Title = title,
+        PlaceHolder = placeholder or "Type here...",
+        MaxSize = maxSize or 100,
+        CallBack = callback
+    })
+end
+
+local function addButton(tab, title, description, callback)
+    if not tab then return nil end
+    local method = tab.Button or tab.AddButton or tab.CreateButton
+    return method(tab, {
+        Title = title,
+        Description = description or "",
+        Type = "Default",
+        CallBack = callback
+    })
+end
+
+local function addKeybind(tab, title, key, callback)
+    if not tab then return nil end
+    local method = tab.Keybind or tab.AddKeybind or tab.CreateKeybind
+    return method(tab, {
+        Title = title,
+        Key = key,
+        CallBack = callback
+    })
+end
+
+local function addSection(tab, title, icon)
+    if not tab then return nil end
+    local method = tab.Section or tab.AddSection or tab.CreateSection
+    return method(tab, title, icon)
+end
+
 -- Main Syde Interface Initialization (Tabs require String arguments only!)
 local Window = syde:Init({
     Title = "Adaptive Aimbot",
@@ -1221,743 +1331,333 @@ local SettingsTab = Window:InitTab("Settings")
 -- ==========================================
 -- COMBAT TAB
 -- ==========================================
-CombatTab:Section("Combat Framework Switch")
-CombatTab:Toggle({
-    Title = "Aimbot Enabled",
-    Description = "Activate master lock-on mechanics.",
-    Value = Config.AimbotEnabled,
-    Config = true,
-    Flag = "AimbotEnabled",
-    CallBack = function(v) Config.AimbotEnabled = v end
-})
-CombatTab:Toggle({
-    Title = "Silent Aim Enabled",
-    Description = "Redirects server-side shoot vectors natively.",
-    Value = Config.SilentAimEnabled,
-    Config = true,
-    Flag = "SilentAimEnabled",
-    CallBack = function(v) Config.SilentAimEnabled = v end
-})
-CombatTab:Toggle({
-    Title = "Hold To Aim",
-    Description = "Require manual tracking keys to be pressed.",
-    Value = Config.HoldToAim,
-    Config = true,
-    Flag = "HoldToAim",
-    CallBack = function(v) Config.HoldToAim = v end
-})
+addSection(CombatTab, "Combat Framework Switch")
+addToggle(CombatTab, "Aimbot Enabled", "Activate master lock-on mechanics.", Config.AimbotEnabled, "AimbotEnabled", function(v) Config.AimbotEnabled = v end)
+addToggle(CombatTab, "Silent Aim Enabled", "Redirects server-side shoot vectors natively.", Config.SilentAimEnabled, "SilentAimEnabled", function(v) Config.SilentAimEnabled = v end)
+addToggle(CombatTab, "Hold To Aim", "Require manual tracking keys to be pressed.", Config.HoldToAim, "HoldToAim", function(v) Config.HoldToAim = v end)
 
-CombatTab:Section("Fine-Tuning & Prediction")
-CombatTab:Toggle({
-    Title = "Target Velocity Prediction",
-    Description = "Calibrates distance/velocity trajectories.",
-    Value = Config.Prediction,
-    Config = true,
-    Flag = "Prediction",
-    CallBack = function(v) Config.Prediction = v end
-})
+addSection(CombatTab, "Fine-Tuning & Prediction")
+addToggle(CombatTab, "Target Velocity Prediction", "Calibrates distance/velocity trajectories.", Config.Prediction, "Prediction", function(v) Config.Prediction = v end)
 
-CombatTab:CreateSlider({
-    Title = "Precision Parameters",
-    Description = "Configures smoothing speeds and reaction delays.",
-    Sliders = {
-        {
-            Title = "Base Smoothing",
-            Range = {1, 100},
-            Increment = 1,
-            StarterValue = Config.Smoothing,
-            Flag = "Smoothing",
-            CallBack = function(v) Config.Smoothing = v end
-        },
-        {
-            Title = "Reaction Delay (ms)",
-            Range = {0, 500},
-            Increment = 5,
-            StarterValue = Config.ReactionDelay,
-            Flag = "ReactionDelay",
-            CallBack = function(v) Config.ReactionDelay = v end
-        },
-        {
-            Title = "Hit Chance (%)",
-            Range = {0, 100},
-            Increment = 1,
-            StarterValue = Config.HitChance,
-            Flag = "HitChance",
-            CallBack = function(v) Config.HitChance = v end
-        }
+addSliders(CombatTab, "Precision Parameters", "Configures smoothing speeds and reaction delays.", {
+    {
+        Title = "Base Smoothing",
+        Range = {1, 100},
+        Increment = 1,
+        StarterValue = Config.Smoothing,
+        Flag = "Smoothing",
+        CallBack = function(v) Config.Smoothing = v end
+    },
+    {
+        Title = "Reaction Delay (ms)",
+        Range = {0, 500},
+        Increment = 5,
+        StarterValue = Config.ReactionDelay,
+        Flag = "ReactionDelay",
+        CallBack = function(v) Config.ReactionDelay = v end
+    },
+    {
+        Title = "Hit Chance (%)",
+        Range = {0, 100},
+        Increment = 1,
+        StarterValue = Config.HitChance,
+        Flag = "HitChance",
+        CallBack = function(v) Config.HitChance = v end
     }
 })
 
-CombatTab:Section("Aim Humanization Mechanics")
-CombatTab:Toggle({
-    Title = "Dynamic Smoothing",
-    Description = "Adds randomized smoothing scales over time.",
-    Value = Config.DynamicSmoothing,
-    Config = true,
-    Flag = "DynamicSmoothing",
-    CallBack = function(v) Config.DynamicSmoothing = v end
-})
-CombatTab:Toggle({
-    Title = "Adaptive Smoothing",
-    Description = "Scales smoothing dynamically based on target distance.",
-    Value = Config.AdaptiveSmoothing,
-    Config = true,
-    Flag = "AdaptiveSmoothing",
-    CallBack = function(v) Config.AdaptiveSmoothing = v end
-})
-CombatTab:Toggle({
-    Title = "Bézier Path Curve Generation",
-    Description = "Utilizes Cubic Bézier curves for realistic hand trajectories.",
-    Value = Config.BezierPathing,
-    Config = true,
-    Flag = "BezierPathing",
-    CallBack = function(v) Config.BezierPathing = v end
-})
-CombatTab:Toggle({
-    Title = "Micro Cursor Jitter",
-    Description = "Injects microscopic hand vibrations into movement paths.",
-    Value = Config.CursorJitter,
-    Config = true,
-    Flag = "CursorJitter",
-    CallBack = function(v) Config.CursorJitter = v end
-})
-CombatTab:CreateSlider({
-    Title = "Human Jitter Tuning",
-    Description = "Modifies simulated human micro-adjustment tremors.",
-    Sliders = {
-        {
-            Title = "Jitter Intensity",
-            Range = {1, 10},
-            Increment = 1,
-            StarterValue = Config.JitterIntensity,
-            Flag = "JitterIntensity",
-            CallBack = function(v) Config.JitterIntensity = v end
-        }
+addSection(CombatTab, "Aim Humanization Mechanics")
+addToggle(CombatTab, "Dynamic Smoothing", "Adds randomized smoothing scales over time.", Config.DynamicSmoothing, "DynamicSmoothing", function(v) Config.DynamicSmoothing = v end)
+addToggle(CombatTab, "Adaptive Smoothing", "Scales smoothing dynamically based on target distance.", Config.AdaptiveSmoothing, "AdaptiveSmoothing", function(v) Config.AdaptiveSmoothing = v end)
+addToggle(CombatTab, "Bézier Path Curve Generation", "Utilizes Cubic Bézier curves for realistic hand trajectories.", Config.BezierPathing, "BezierPathing", function(v) Config.BezierPathing = v end)
+addToggle(CombatTab, "Micro Cursor Jitter", "Injects microscopic hand vibrations into movement paths.", Config.CursorJitter, "CursorJitter", function(v) Config.CursorJitter = v end)
+
+addSliders(CombatTab, "Human Jitter Tuning", "Modifies simulated human micro-adjustment tremors.", {
+    {
+        Title = "Jitter Intensity",
+        Range = {1, 10},
+        Increment = 1,
+        StarterValue = Config.JitterIntensity,
+        Flag = "JitterIntensity",
+        CallBack = function(v) Config.JitterIntensity = v end
     }
 })
-CombatTab:Toggle({
-    Title = "Mouse Input Emulation Bypass",
-    Description = "Translates aim movement via mousemoverel virtual frames.",
-    Value = Config.MouseEventEmulation,
-    Config = true,
-    Flag = "MouseEventEmulation",
-    CallBack = function(v) Config.MouseEventEmulation = v end
-})
 
-CombatTab:Section("Autoshoot & Wallbang Calibration")
-CombatTab:Toggle({
-    Title = "Autoshoot Enabled",
-    Description = "Triggers weapons automatically when targets lock.",
-    Value = Config.AutoShootEnabled,
-    Config = true,
-    Flag = "AutoShootEnabled",
-    CallBack = function(v) Config.AutoShootEnabled = v end
-})
-CombatTab:Toggle({
-    Title = "Autowallbang Enabled",
-    Description = "Penetrates solid map parts towards player joints.",
-    Value = Config.AutoWallbangEnabled,
-    Config = true,
-    Flag = "AutoWallbangEnabled",
-    CallBack = function(v) Config.AutoWallbangEnabled = v end
-})
-CombatTab:Toggle({
-    Title = "Rage Mode Legit Bypass Off",
-    Description = "Bypasses all thickness checks for instant wall-piercing.",
-    Value = not Config.LegitMode,
-    Config = true,
-    Flag = "RageModeBypass",
-    CallBack = function(v) Config.LegitMode = not v end
-})
+addToggle(CombatTab, "Mouse Input Emulation Bypass", "Translates aim movement via mousemoverel virtual frames.", Config.MouseEventEmulation, "MouseEventEmulation", function(v) Config.MouseEventEmulation = v end)
 
-CombatTab:Section("Triggerbot Settings")
-CombatTab:Toggle({
-    Title = "Triggerbot Enabled",
-    Description = "Shoot automatically when your cursor crosses an enemy.",
-    Value = Config.TriggerbotEnabled,
-    Config = true,
-    Flag = "TriggerbotEnabled",
-    CallBack = function(v) Config.TriggerbotEnabled = v end
-})
+addSection(CombatTab, "Autoshoot & Wallbang Calibration")
+addToggle(CombatTab, "Autoshoot Enabled", "Triggers weapons automatically when targets lock.", Config.AutoShootEnabled, "AutoShootEnabled", function(v) Config.AutoShootEnabled = v end)
+addToggle(CombatTab, "Autowallbang Enabled", "Penetrates solid map parts towards player joints.", Config.AutoWallbangEnabled, "AutoWallbangEnabled", function(v) Config.AutoWallbangEnabled = v end)
+addToggle(CombatTab, "Rage Mode Legit Bypass Off", "Bypasses all thickness checks for instant wall-piercing.", not Config.LegitMode, "RageModeBypass", function(v) Config.LegitMode = not v end)
 
-local triggerModes = {"Crosshair", "Aimbot Lock"}
-CombatTab:Dropdown({
-    Title = "Triggerbot Evaluation Mode",
-    Options = triggerModes,
-    PlaceHolder = "Select type...",
-    Multi = false,
-    CallBack = function(opt) Config.TriggerbotMode = opt end
-})
+addSection(CombatTab, "Triggerbot Settings")
+addToggle(CombatTab, "Triggerbot Enabled", "Shoot automatically when your cursor crosses an enemy.", Config.TriggerbotEnabled, "TriggerbotEnabled", function(v) Config.TriggerbotEnabled = v end)
+addDropdown(CombatTab, "Triggerbot Evaluation Mode", {"Crosshair", "Aimbot Lock"}, "Select type...", false, function(opt) Config.TriggerbotMode = opt end)
 
-CombatTab:Section("Anti-Aim Overrides")
-CombatTab:Toggle({
-    Title = "Enable Anti-Aim",
-    Description = "Actively distorts player alignment coordinates.",
-    Value = Config.AntiAimEnabled,
-    Config = true,
-    Flag = "AntiAimEnabled",
-    CallBack = function(v) Config.AntiAimEnabled = v; updateAntiAim() end
-})
+addSection(CombatTab, "Anti-Aim Overrides")
+addToggle(CombatTab, "Enable Anti-Aim", "Actively distorts player alignment coordinates.", Config.AntiAimEnabled, "AntiAimEnabled", function(v) Config.AntiAimEnabled = v; updateAntiAim() end)
+addDropdown(CombatTab, "AA Movement Profile", {"Spin", "Jitter", "Side Jitter", "Backward", "Up-Down", "Custom Yaw", "Lurch"}, "Select style...", false, function(opt) Config.AntiAimMode = opt; updateAntiAim() end)
 
-local antiAimModes = {"Spin", "Jitter", "Side Jitter", "Backward", "Up-Down", "Custom Yaw", "Lurch"}
-CombatTab:Dropdown({
-    Title = "AA Movement Profile",
-    Options = antiAimModes,
-    PlaceHolder = "Select style...",
-    Multi = false,
-    CallBack = function(opt) Config.AntiAimMode = opt; updateAntiAim() end
-})
-
-CombatTab:CreateSlider({
-    Title = "AA Rotation Speeds",
-    Description = "Manages yaw customization limits.",
-    Sliders = {
-        {
-            Title = "Anti-Aim Rotation Velocity",
-            Range = {1, 50},
-            Increment = 1,
-            StarterValue = Config.AntiAimSpeed,
-            Flag = "AntiAimSpeed",
-            CallBack = function(v) Config.AntiAimSpeed = v end
-        },
-        {
-            Title = "Custom Offset Angle",
-            Range = {0, 360},
-            Increment = 5,
-            StarterValue = Config.AntiAimYawOffset,
-            Flag = "AntiAimYawOffset",
-            CallBack = function(v) Config.AntiAimYawOffset = v end
-        }
+addSliders(CombatTab, "AA Rotation Speeds", "Manages yaw customization limits.", {
+    {
+        Title = "Anti-Aim Rotation Velocity",
+        Range = {1, 50},
+        Increment = 1,
+        StarterValue = Config.AntiAimSpeed,
+        Flag = "AntiAimSpeed",
+        CallBack = function(v) Config.AntiAimSpeed = v end
+    },
+    {
+        Title = "Custom Offset Angle",
+        Range = {0, 360},
+        Increment = 5,
+        StarterValue = Config.AntiAimYawOffset,
+        Flag = "AntiAimYawOffset",
+        CallBack = function(v) Config.AntiAimYawOffset = v end
     }
 })
 
 -- ==========================================
 -- VISUALS TAB
 -- ==========================================
-VisualsTab:Section("ESP Rendering Elements")
-VisualsTab:Toggle({
-    Title = "Master ESP Toggle",
-    Description = "Render drawing frames around other active entities.",
-    Value = Config.EspEnabled,
-    Config = true,
-    Flag = "EspEnabled",
-    CallBack = function(v) Config.EspEnabled = v end
-})
-VisualsTab:Toggle({
-    Title = "Box Frames",
-    Value = Config.EspBoxes,
-    Config = true,
-    Flag = "EspBoxes",
-    CallBack = function(v) Config.EspBoxes = v end
-})
-VisualsTab:Toggle({
-    Title = "Entity Names",
-    Value = Config.EspNames,
-    Config = true,
-    Flag = "EspNames",
-    CallBack = function(v) Config.EspNames = v end
-})
-VisualsTab:Toggle({
-    Title = "Distance Meters",
-    Value = Config.EspDistances,
-    Config = true,
-    Flag = "EspDistances",
-    CallBack = function(v) Config.EspDistances = v end
-})
-VisualsTab:Toggle({
-    Title = "Health Indicators",
-    Value = Config.EspHealth,
-    Config = true,
-    Flag = "EspHealth",
-    CallBack = function(v) Config.EspHealth = v end
-})
-VisualsTab:Toggle({
-    Title = "Snaplines / Tracers",
-    Value = Config.EspTracers,
-    Config = true,
-    Flag = "EspTracers",
-    CallBack = function(v) Config.EspTracers = v end
-})
+addSection(VisualsTab, "ESP Rendering Elements")
+addToggle(VisualsTab, "Master ESP Toggle", "Render drawing frames around other active entities.", Config.EspEnabled, "EspEnabled", function(v) Config.EspEnabled = v end)
+addToggle(VisualsTab, "Box Frames", "Render bounding boxes around players.", Config.EspBoxes, "EspBoxes", function(v) Config.EspBoxes = v end)
+addToggle(VisualsTab, "Entity Names", "Display player nicknames.", Config.EspNames, "EspNames", function(v) Config.EspNames = v end)
+addToggle(VisualsTab, "Distance Meters", "Display distance in studs.", Config.EspDistances, "EspDistances", function(v) Config.EspDistances = v end)
+addToggle(VisualsTab, "Health Indicators", "Display active HP levels.", Config.EspHealth, "EspHealth", function(v) Config.EspHealth = v end)
+addToggle(VisualsTab, "Snaplines / Tracers", "Draw lines from screen center or bottom.", Config.EspTracers, "EspTracers", function(v) Config.EspTracers = v end)
+addDropdown(VisualsTab, "Snaplines Origin Coordinate", {"Bottom", "Center", "Mouse"}, "Select origin...", false, function(opt) Config.EspTracerOrigin = opt end)
 
-local tracersOrigins = {"Bottom", "Center", "Mouse"}
-VisualsTab:Dropdown({
-    Title = "Snaplines Origin Coordinate",
-    Options = tracersOrigins,
-    PlaceHolder = "Select origin...",
-    Multi = false,
-    CallBack = function(opt) Config.EspTracerOrigin = opt end
-})
-
-VisualsTab:Section("Off-Screen Indicators")
-VisualsTab:Toggle({
-    Title = "Out of View (OOF) Pointers",
-    Description = "Draws directional screen triangles towards offscreen players.",
-    Value = Config.OofIndicatorsEnabled,
-    Config = true,
-    Flag = "OofIndicatorsEnabled",
-    CallBack = function(v) Config.OofIndicatorsEnabled = v end
-})
-VisualsTab:CreateSlider({
-    Title = "OOF Indicator Tuning",
-    Description = "Fine-tune sizes and boundaries of OOF triangles.",
-    Sliders = {
-        {
-            Title = "Pointer Size",
-            Range = {5, 30},
-            Increment = 1,
-            StarterValue = Config.OofIndicatorsSize,
-            Flag = "OofIndicatorsSize",
-            CallBack = function(v) Config.OofIndicatorsSize = v end
-        },
-        {
-            Title = "Screen Boundary Distance",
-            Range = {50, 400},
-            Increment = 5,
-            StarterValue = Config.OofIndicatorsRadius,
-            Flag = "OofIndicatorsRadius",
-            CallBack = function(v) Config.OofIndicatorsRadius = v end
-        }
+addSection(VisualsTab, "Off-Screen Indicators")
+addToggle(VisualsTab, "Out of View (OOF) Pointers", "Draws directional screen triangles towards offscreen players.", Config.OofIndicatorsEnabled, "OofIndicatorsEnabled", function(v) Config.OofIndicatorsEnabled = v end)
+addSliders(VisualsTab, "OOF Indicator Tuning", "Fine-tune sizes and boundaries of OOF triangles.", {
+    {
+        Title = "Pointer Size",
+        Range = {5, 30},
+        Increment = 1,
+        StarterValue = Config.OofIndicatorsSize,
+        Flag = "OofIndicatorsSize",
+        CallBack = function(v) Config.OofIndicatorsSize = v end
+    },
+    {
+        Title = "Screen Boundary Distance",
+        Range = {50, 400},
+        Increment = 5,
+        StarterValue = Config.OofIndicatorsRadius,
+        Flag = "OofIndicatorsRadius",
+        CallBack = function(v) Config.OofIndicatorsRadius = v end
     }
 })
 
-VisualsTab:Section("Chams Framework")
-VisualsTab:Toggle({
-    Title = "Chams Enabled",
-    Description = "Fills character textures with standard solid colors.",
-    Value = Config.ChamsEnabled,
-    Config = true,
-    Flag = "ChamsEnabled",
-    CallBack = function(v) Config.ChamsEnabled = v end
-})
-VisualsTab:Toggle({
-    Title = "Render Through Walls (Depth Mode Always)",
-    Value = Config.ChamsAlwaysOnTop,
-    Config = true,
-    Flag = "ChamsAlwaysOnTop",
-    CallBack = function(v) Config.ChamsAlwaysOnTop = v end
-})
-VisualsTab:CreateSlider({
-    Title = "Chams Transparencies",
-    Description = "Custom opacity configurations.",
-    Sliders = {
-        {
-            Title = "Fill Alpha Opacity",
-            Range = {0, 100},
-            Increment = 5,
-            StarterValue = math.floor(Config.ChamsFillTransparency * 100),
-            Flag = "ChamsFillTransparency",
-            CallBack = function(v) Config.ChamsFillTransparency = v / 100 end
-        },
-        {
-            Title = "Outline Alpha Opacity",
-            Range = {0, 100},
-            Increment = 5,
-            StarterValue = math.floor(Config.ChamsOutlineTransparency * 100),
-            Flag = "ChamsOutlineTransparency",
-            CallBack = function(v) Config.ChamsOutlineTransparency = v / 100 end
-        }
+addSection(VisualsTab, "Chams Framework")
+addToggle(VisualsTab, "Chams Enabled", "Fills character textures with standard solid colors.", Config.ChamsEnabled, "ChamsEnabled", function(v) Config.ChamsEnabled = v end)
+addToggle(VisualsTab, "Render Through Walls (Depth Mode Always)", "Always on top of world geometry.", Config.ChamsAlwaysOnTop, "ChamsAlwaysOnTop", function(v) Config.ChamsAlwaysOnTop = v end)
+addSliders(VisualsTab, "Chams Transparencies", "Custom opacity configurations.", {
+    {
+        Title = "Fill Alpha Opacity",
+        Range = {0, 100},
+        Increment = 5,
+        StarterValue = math.floor(Config.ChamsFillTransparency * 100),
+        Flag = "ChamsFillTransparency",
+        CallBack = function(v) Config.ChamsFillTransparency = v / 100 end
+    },
+    {
+        Title = "Outline Alpha Opacity",
+        Range = {0, 100},
+        Increment = 5,
+        StarterValue = math.floor(Config.ChamsOutlineTransparency * 100),
+        Flag = "ChamsOutlineTransparency",
+        CallBack = function(v) Config.ChamsOutlineTransparency = v / 100 end
     }
 })
 
-VisualsTab:Section("ESP Colors")
-VisualsTab:ColorPicker({
-    Title = "Primary ESP Colors",
-    Color = Config.EspColor,
-    Flag = "EspColorFlag",
-    CallBack = function(c) Config.EspColor = c end
-})
-VisualsTab:ColorPicker({
-    Title = "Chams Inner Color",
-    Color = Config.ChamsFillColor,
-    Flag = "ChamsFillColorFlag",
-    CallBack = function(c) Config.ChamsFillColor = c end
-})
-VisualsTab:ColorPicker({
-    Title = "Chams Border Outline Color",
-    Color = Config.ChamsOutlineColor,
-    Flag = "ChamsOutlineColorFlag",
-    CallBack = function(c) Config.ChamsOutlineColor = c end
-})
-VisualsTab:ColorPicker({
-    Title = "OOF Indicator Color",
-    Color = Config.OofIndicatorsColor,
-    Flag = "OofIndicatorsColorFlag",
-    CallBack = function(c) Config.OofIndicatorsColor = c end
-})
+addSection(VisualsTab, "ESP Colors")
+addColorPicker(VisualsTab, "Primary ESP Colors", "Default ESP text and box outlines.", Config.EspColor, "EspColorFlag", function(c) Config.EspColor = c end)
+addColorPicker(VisualsTab, "Chams Inner Color", "Fill color of visible geometry.", Config.ChamsFillColor, "ChamsFillColorFlag", function(c) Config.ChamsFillColor = c end)
+addColorPicker(VisualsTab, "Chams Border Outline Color", "Color of exterior borders.", Config.ChamsOutlineColor, "ChamsOutlineColorFlag", function(c) Config.ChamsOutlineColor = c end)
+addColorPicker(VisualsTab, "OOF Indicator Color", "Color of screen pointer triangles.", Config.OofIndicatorsColor, "OofIndicatorsColorFlag", function(c) Config.OofIndicatorsColor = c end)
 
-VisualsTab:Section("Screen Overlays")
-VisualsTab:Toggle({
-    Title = "Enable FOV Circle Overlay",
-    Value = Config.FOVEnabled,
-    Config = true,
-    Flag = "FOVEnabled",
-    CallBack = function(v) Config.FOVEnabled = v end
-})
-VisualsTab:Toggle({
-    Title = "Animated FOV Circle (Breathing Effect)",
-    Description = "Smoothly scale circle radius using sin wave functions.",
-    Value = Config.FovAnimated,
-    Config = true,
-    Flag = "FovAnimated",
-    CallBack = function(v) Config.FovAnimated = v end
-})
-VisualsTab:CreateSlider({
-    Title = "FOV Parameters",
-    Sliders = {
-        {
-            Title = "FOV Boundary Limit (Radius)",
-            Range = {10, 800},
-            Increment = 5,
-            StarterValue = Config.FOVRadius,
-            Flag = "FOVRadius",
-            CallBack = function(v) Config.FOVRadius = v end
-        }
+addSection(VisualsTab, "Screen Overlays")
+addToggle(VisualsTab, "Enable FOV Circle Overlay", "Render interactive FOV guidelines.", Config.FOVEnabled, "FOVEnabled", function(v) Config.FOVEnabled = v end)
+addToggle(VisualsTab, "Animated FOV Circle (Breathing Effect)", "Smoothly scale circle radius using sin wave functions.", Config.FovAnimated, "FovAnimated", function(v) Config.FovAnimated = v end)
+addSliders(VisualsTab, "FOV Parameters", "Modify boundary range limits.", {
+    {
+        Title = "FOV Boundary Limit (Radius)",
+        Range = {10, 800},
+        Increment = 5,
+        StarterValue = Config.FOVRadius,
+        Flag = "FOVRadius",
+        CallBack = function(v) Config.FOVRadius = v end
     }
 })
-VisualsTab:ColorPicker({
-    Title = "FOV Outline Color",
-    Color = Config.FOVColor,
-    Flag = "FOVColorFlag",
-    CallBack = function(c) Config.FOVColor = c end
-})
+addColorPicker(VisualsTab, "FOV Outline Color", "Change boundary color shade.", Config.FOVColor, "FOVColorFlag", function(c) Config.FOVColor = c end)
 
-VisualsTab:Section("Target & Silent Trackers")
-VisualsTab:Toggle({
-    Title = "Show Selected Target Indicator Box",
-    Value = Config.ShowTargetIndicator,
-    Config = true,
-    Flag = "ShowTargetIndicator",
-    CallBack = function(v) Config.ShowTargetIndicator = v end
-})
-VisualsTab:Toggle({
-    Title = "Show Silent Aim Tracking Point Dot",
-    Value = Config.SilentVisualizerEnabled,
-    Config = true,
-    Flag = "SilentVisualizerEnabled",
-    CallBack = function(v) Config.SilentVisualizerEnabled = v end
-})
+addSection(VisualsTab, "Target & Silent Trackers")
+addToggle(VisualsTab, "Show Selected Target Indicator Box", "Highlights tracked enemy visually.", Config.ShowTargetIndicator, "ShowTargetIndicator", function(v) Config.ShowTargetIndicator = v end)
+addToggle(VisualsTab, "Show Silent Aim Tracking Point Dot", "Pointers where silent bullets are heading.", Config.SilentVisualizerEnabled, "SilentVisualizerEnabled", function(v) Config.SilentVisualizerEnabled = v end)
 
-VisualsTab:Section("Minimap Radar Hack")
-VisualsTab:Toggle({
-    Title = "Enable Screen Minimap Radar",
-    Description = "Spawns customized screen radar mapping enemy routes.",
-    Value = Config.RadarHackEnabled,
-    Config = true,
-    Flag = "RadarHackEnabled",
-    CallBack = function(v) Config.RadarHackEnabled = v end
-})
-VisualsTab:CreateSlider({
-    Title = "Radar Controls",
-    Description = "Adjust radar size and visual scale.",
-    Sliders = {
-        {
-            Title = "Radar Box Radius",
-            Range = {50, 250},
-            Increment = 5,
-            StarterValue = Config.RadarSize,
-            Flag = "RadarSize",
-            CallBack = function(v) Config.RadarSize = v end
-        },
-        {
-            Title = "Radar Scale",
-            Range = {1, 5},
-            Increment = 1,
-            StarterValue = Config.RadarScale,
-            Flag = "RadarScale",
-            CallBack = function(v) Config.RadarScale = v end
-        }
+addSection(VisualsTab, "Minimap Radar Hack")
+addToggle(VisualsTab, "Enable Screen Minimap Radar", "Spawns customized screen radar mapping enemy routes.", Config.RadarHackEnabled, "RadarHackEnabled", function(v) Config.RadarHackEnabled = v end)
+addSliders(VisualsTab, "Radar Controls", "Adjust radar size and visual scale.", {
+    {
+        Title = "Radar Box Radius",
+        Range = {50, 250},
+        Increment = 5,
+        StarterValue = Config.RadarSize,
+        Flag = "RadarSize",
+        CallBack = function(v) Config.RadarSize = v end
+    },
+    {
+        Title = "Radar Scale",
+        Range = {1, 5},
+        Increment = 1,
+        StarterValue = Config.RadarScale,
+        Flag = "RadarScale",
+        CallBack = function(v) Config.RadarScale = v end
     }
 })
 
-VisualsTab:Section("Feedback Overlays")
-VisualsTab:Toggle({
-    Title = "Floating Damage Indicators",
-    Description = "Floats calculated deal-damage numbers in real-time above target joints.",
-    Value = Config.DamageIndicators,
-    Config = true,
-    Flag = "DamageIndicators",
-    CallBack = function(v) Config.DamageIndicators = v end
-})
-VisualsTab:Toggle({
-    Title = "Enable Hitmarkers",
-    Description = "Renders diagonal crosshair lines upon registered health changes.",
-    Value = Config.HitMarkers,
-    Config = true,
-    Flag = "HitMarkers",
-    CallBack = function(v) Config.HitMarkers = v end
-})
-VisualsTab:Toggle({
-    Title = "Play Hitmarker Sound",
-    Description = "Play classical FPS hit crunches.",
-    Value = Config.HitSoundEnabled,
-    Config = true,
-    Flag = "HitSoundEnabled",
-    CallBack = function(v) Config.HitSoundEnabled = v end
-})
+addSection(VisualsTab, "Feedback Overlays")
+addToggle(VisualsTab, "Floating Damage Indicators", "Floats calculated deal-damage numbers in real-time.", Config.DamageIndicators, "DamageIndicators", function(v) Config.DamageIndicators = v end)
+addToggle(VisualsTab, "Enable Hitmarkers", "Renders diagonal crosshair lines upon hits.", Config.HitMarkers, "HitMarkers", function(v) Config.HitMarkers = v end)
+addToggle(VisualsTab, "Play Hitmarker Sound", "Play classical FPS hit crunches.", Config.HitSoundEnabled, "HitSoundEnabled", function(v) Config.HitSoundEnabled = v end)
 
 -- ==========================================
 -- MOVEMENT TAB
 -- ==========================================
-MovementTab:Section("Player Physics Overrides")
-MovementTab:Toggle({
-    Title = "Bunny Hop Simulation",
-    Description = "Automatically triggers jump sequences when holding the space bar.",
-    Value = Config.BhopEnabled,
-    Config = true,
-    Flag = "BhopEnabled",
-    CallBack = function(v) Config.BhopEnabled = v end
-})
-MovementTab:Toggle({
-    Title = "Edge Jump / Auto Ledge Grab",
-    Description = "Jump automatically when approaching solid edge boundaries to retain speed.",
-    Value = Config.EdgeJumpEnabled,
-    Config = true,
-    Flag = "EdgeJumpEnabled",
-    CallBack = function(v) Config.EdgeJumpEnabled = v end
-})
+addSection(MovementTab, "Player Physics Overrides")
+addToggle(MovementTab, "Bunny Hop Simulation", "Automatically triggers jump sequences when holding space.", Config.BhopEnabled, "BhopEnabled", function(v) Config.BhopEnabled = v end)
+addToggle(MovementTab, "Automatic Edge Jump / Ledge Grab", "Jump automatically when approaching solid edge boundaries.", Config.EdgeJumpEnabled, "EdgeJumpEnabled", function(v) Config.EdgeJumpEnabled = v end)
 
-MovementTab:Section("Movement Slow Walk (CS:GO style)")
-MovementTab:Toggle({
-    Title = "Silent Walk (Slow Walk)",
-    Description = "Clamps maximum speeds when walking keys are depressed.",
-    Value = Config.SilentWalkEnabled,
-    Config = true,
-    Flag = "SilentWalkEnabled",
-    CallBack = function(v) Config.SilentWalkEnabled = v end
-})
-MovementTab:CreateSlider({
-    Title = "Slow Walk Velocity Modifier",
-    Sliders = {
-        {
-            Title = "Walk Velocity Clamping Speed",
-            Range = {1, 16},
-            Increment = 1,
-            StarterValue = Config.SilentWalkSpeed,
-            Flag = "SilentWalkSpeed",
-            CallBack = function(v) Config.SilentWalkSpeed = v end
-        }
+addSection(MovementTab, "Movement Slow Walk")
+addToggle(MovementTab, "Silent Walk (Slow Walk)", "Clamps maximum speeds when walking keys are depressed.", Config.SilentWalkEnabled, "SilentWalkEnabled", function(v) Config.SilentWalkEnabled = v end)
+addSliders(MovementTab, "Slow Walk Velocity Modifier", "Fine-tune velocity clamps.", {
+    {
+        Title = "Walk Velocity Clamping Speed",
+        Range = {1, 16},
+        Increment = 1,
+        StarterValue = Config.SilentWalkSpeed,
+        Flag = "SilentWalkSpeed",
+        CallBack = function(v) Config.SilentWalkSpeed = v end
     }
 })
 
-MovementTab:Section("Anti-AFK & Latency Spoofing")
-MovementTab:Toggle({
-    Title = "Anti-AFK Bypass",
-    Description = "Simulates tiny movement loops when idle timers activate.",
-    Value = Config.AntiAfkEnabled,
-    Config = true,
-    Flag = "AntiAfkEnabled",
-    CallBack = function(v) Config.AntiAfkEnabled = v end
-})
-MovementTab:Toggle({
-    Title = "Fake Lag Spike (Packet Distorter)",
-    Description = "Spikes physical latency parameters to obtain peek advantages.",
-    Value = Config.FakeLagEnabled,
-    Config = true,
-    Flag = "FakeLagEnabled",
-    CallBack = function(v) Config.FakeLagEnabled = v end
-})
-MovementTab:CreateSlider({
-    Title = "Fake Lag Modifiers",
-    Sliders = {
-        {
-            Title = "Spike Frequency Range (%)",
-            Range = {1, 100},
-            Increment = 5,
-            StarterValue = Config.FakeLagInterval,
-            Flag = "FakeLagInterval",
-            CallBack = function(v) Config.FakeLagInterval = v end
-        },
-        {
-            Title = "Spike Latency Duration (ms)",
-            Range = {50, 1000},
-            Increment = 10,
-            StarterValue = Config.FakeLagDuration,
-            Flag = "FakeLagDuration",
-            CallBack = function(v) Config.FakeLagDuration = v end
-        }
+addSection(MovementTab, "Anti-AFK & Latency Spoofing")
+addToggle(MovementTab, "Anti-AFK Bypass", "Simulates tiny movement loops when idle timers activate.", Config.AntiAfkEnabled, "AntiAfkEnabled", function(v) Config.AntiAfkEnabled = v end)
+addToggle(MovementTab, "Fake Lag Spike (Packet Distorter)", "Spikes physical latency parameters to obtain peek advantages.", Config.FakeLagEnabled, "FakeLagEnabled", function(v) Config.FakeLagEnabled = v end)
+addSliders(MovementTab, "Fake Lag Modifiers", "Modify rate and size of lag spikes.", {
+    {
+        Title = "Spike Frequency Range (%)",
+        Range = {1, 100},
+        Increment = 5,
+        StarterValue = Config.FakeLagInterval,
+        Flag = "FakeLagInterval",
+        CallBack = function(v) Config.FakeLagInterval = v end
+    },
+    {
+        Title = "Spike Latency Duration (ms)",
+        Range = {50, 1000},
+        Increment = 10,
+        StarterValue = Config.FakeLagDuration,
+        Flag = "FakeLagDuration",
+        CallBack = function(v) Config.FakeLagDuration = v end
     }
 })
 
 -- ==========================================
 -- WORLD TAB
 -- ==========================================
-WorldTab:Section("Environmental Fog Modifications")
-WorldTab:Toggle({
-    Title = "Custom Fog Overrides",
-    Description = "Enable custom client-side atmosphere settings.",
-    Value = Config.FogEnabled,
-    Config = true,
-    Flag = "FogEnabled",
-    CallBack = function(v) Config.FogEnabled = v; applyLightingSettings() end
-})
-WorldTab:CreateSlider({
-    Title = "Atmospheric Fog Modifiers",
-    Sliders = {
-        {
-            Title = "Fog Clear Range Start",
-            Range = {0, 5000},
-            Increment = 50,
-            StarterValue = Config.FogStart,
-            Flag = "FogStart",
-            CallBack = function(v) Config.FogStart = v; applyLightingSettings() end
-        },
-        {
-            Title = "Fog Dense Boundary Limit",
-            Range = {100, 20000},
-            Increment = 100,
-            StarterValue = Config.FogEnd,
-            Flag = "FogEnd",
-            CallBack = function(v) Config.FogEnd = v; applyLightingSettings() end
-        }
+addSection(WorldTab, "Environmental Fog Modifications")
+addToggle(WorldTab, "Custom Fog Overrides", "Enable custom client-side atmosphere settings.", Config.FogEnabled, "FogEnabled", function(v) Config.FogEnabled = v; applyLightingSettings() end)
+addSliders(WorldTab, "Atmospheric Fog Modifiers", "Fine-tune fog distances.", {
+    {
+        Title = "Fog Clear Range Start",
+        Range = {0, 5000},
+        Increment = 50,
+        StarterValue = Config.FogStart,
+        Flag = "FogStart",
+        CallBack = function(v) Config.FogStart = v; applyLightingSettings() end
+    },
+    {
+        Title = "Fog Dense Boundary Limit",
+        Range = {100, 20000},
+        Increment = 100,
+        StarterValue = Config.FogEnd,
+        Flag = "FogEnd",
+        CallBack = function(v) Config.FogEnd = v; applyLightingSettings() end
     }
 })
-WorldTab:ColorPicker({
-    Title = "Fog Density Color",
-    Color = Config.FogColor,
-    Flag = "FogColorFlag",
-    CallBack = function(c) Config.FogColor = c; applyLightingSettings() end
-})
+addColorPicker(WorldTab, "Fog Density Color", "Color of environmental fog.", Config.FogColor, "FogColorFlag", function(c) Config.FogColor = c; applyLightingSettings() end)
 
-WorldTab:Section("Time Cycle Locking")
-WorldTab:Toggle({
-    Title = "Custom Ambient Lighting Enabled",
-    Description = "Forces custom lighting parameters directly into client memory.",
-    Value = Config.CustomLightingEnabled,
-    Config = true,
-    Flag = "CustomLightingEnabled",
-    CallBack = function(v) Config.CustomLightingEnabled = v; applyLightingSettings() end
-})
-WorldTab:CreateSlider({
-    Title = "Daylight Adjusters",
-    Sliders = {
-        {
-            Title = "Forced Clock Time (0-24hr)",
-            Range = {0, 24},
-            Increment = 1,
-            StarterValue = math.floor(Config.ClockTime),
-            Flag = "ClockTime",
-            CallBack = function(v) Config.ClockTime = v; applyLightingSettings() end
-        },
-        {
-            Title = "Exposure Intensity",
-            Range = {0, 10},
-            Increment = 1,
-            StarterValue = math.floor(Config.Brightness),
-            Flag = "Brightness",
-            CallBack = function(v) Config.Brightness = v; applyLightingSettings() end
-        }
+addSection(WorldTab, "Time Cycle Locking")
+addToggle(WorldTab, "Custom Ambient Lighting Enabled", "Forces custom lighting parameters directly into client memory.", Config.CustomLightingEnabled, "CustomLightingEnabled", function(v) Config.CustomLightingEnabled = v; applyLightingSettings() end)
+addSliders(WorldTab, "Daylight Adjusters", "Adjust brightness and times.", {
+    {
+        Title = "Forced Clock Time (0-24hr)",
+        Range = {0, 24},
+        Increment = 1,
+        StarterValue = math.floor(Config.ClockTime),
+        Flag = "ClockTime",
+        CallBack = function(v) Config.ClockTime = v; applyLightingSettings() end
+    },
+    {
+        Title = "Exposure Intensity",
+        Range = {0, 10},
+        Increment = 1,
+        StarterValue = math.floor(Config.Brightness),
+        Flag = "Brightness",
+        CallBack = function(v) Config.Brightness = v; applyLightingSettings() end
     }
 })
-WorldTab:ColorPicker({
-    Title = "Custom Ambient Shadow Shade",
-    Color = Config.AmbientColor,
-    Flag = "AmbientColorFlag",
-    CallBack = function(c) Config.AmbientColor = c; applyLightingSettings() end
-})
-WorldTab:ColorPicker({
-    Title = "Custom Outdoor Ambient Color",
-    Color = Config.OutdoorAmbientColor,
-    Flag = "OutdoorAmbientColorFlag",
-    CallBack = function(c) Config.OutdoorAmbientColor = c; applyLightingSettings() end
-})
+addColorPicker(WorldTab, "Custom Ambient Shadow Shade", "Ambient shadow shading.", Config.AmbientColor, "AmbientColorFlag", function(c) Config.AmbientColor = c; applyLightingSettings() end)
+addColorPicker(WorldTab, "Custom Outdoor Ambient Color", "Atmosphere surrounding light.", Config.OutdoorAmbientColor, "OutdoorAmbientColorFlag", function(c) Config.OutdoorAmbientColor = c; applyLightingSettings() end)
 
 -- ==========================================
 -- SETTINGS TAB
 -- ==========================================
-SettingsTab:Section("Local UI Styling Customizer")
-local accentNames = {"Blue", "Purple", "Pink", "Red", "Orange", "Yellow", "Green", "Graphite"}
-SettingsTab:Dropdown({
-    Title = "Accent Theme Color Selector",
-    Options = accentNames,
-    PlaceHolder = "Select color theme...",
-    Multi = false,
-    CallBack = function(opt)
-        if syde.Accents and syde.Accents[opt] then
-            syde.Accent = syde.Accents[opt]
-        end
+addSection(SettingsTab, "Local UI Styling Customizer")
+addDropdown(SettingsTab, "Accent Theme Color Selector", {"Blue", "Purple", "Pink", "Red", "Orange", "Yellow", "Green", "Graphite"}, "Select color theme...", false, function(opt)
+    if syde.Accents and syde.Accents[opt] then
+        syde.Accent = syde.Accents[opt]
     end
-})
+end)
 
-SettingsTab:Section("Telemetry Monitor Widgets")
-SettingsTab:Toggle({
-    Title = "Custom Watermark Overlay",
-    Value = Config.WatermarkEnabled,
-    Config = true,
-    Flag = "WatermarkEnabled",
-    CallBack = function(v) Config.WatermarkEnabled = v end
-})
-SettingsTab:TextInput({
-    Title = "Watermark Text Label",
-    PlaceHolder = "Adaptive Aimbot...",
-    MaxSize = 50,
-    CallBack = function(text) Config.WatermarkText = text end
-})
-SettingsTab:Toggle({
-    Title = "Diagnostics / FPS & Ping Monitor",
-    Description = "Displays detailed FPS, ping, and memory monitors.",
-    Value = Config.PerfMonitorEnabled,
-    Config = true,
-    Flag = "PerfMonitorEnabled",
-    CallBack = function(v) Config.PerfMonitorEnabled = v end
-})
+addSection(SettingsTab, "Telemetry Monitor Widgets")
+addToggle(SettingsTab, "Custom Watermark Overlay", "Show script watermark overlay.", Config.WatermarkEnabled, "WatermarkEnabled", function(v) Config.WatermarkEnabled = v end)
+addTextInput(SettingsTab, "Watermark Text Label", "Adaptive Aimbot...", 50, function(text) Config.WatermarkText = text end)
+addToggle(SettingsTab, "Diagnostics / FPS & Ping Monitor", "Displays detailed FPS, ping, and memory monitors.", Config.PerfMonitorEnabled, "PerfMonitorEnabled", function(v) Config.PerfMonitorEnabled = v end)
 
-SettingsTab:Section("Loadout Cloud Config Sharing")
-SettingsTab:TextInput({
-    Title = "Config Serializer Loadout Code",
-    PlaceHolder = "Paste shared code string here...",
-    MaxSize = 300,
-    CallBack = function(text) Config.CloudConfigCode = text end
-})
-SettingsTab:Button({
-    Title = "Import Shared Config Code",
-    Description = "Applies loaded settings instantly to current profile parameters.",
-    Type = "Default",
-    CallBack = function()
-        if Config.CloudConfigCode ~= "" then
-            parseCloudCode(Config.CloudConfigCode)
-        end
+addSection(SettingsTab, "Loadout Cloud Config Sharing")
+addTextInput(SettingsTab, "Config Serializer Loadout Code", "Paste shared code string here...", 300, function(text) Config.CloudConfigCode = text end)
+addButton(SettingsTab, "Import Shared Config Code", "Applies loaded settings instantly to current profile parameters.", function()
+    if Config.CloudConfigCode ~= "" then
+        parseCloudCode(Config.CloudConfigCode)
     end
-})
-SettingsTab:Button({
-    Title = "Generate Shareable Config Code",
-    Description = "Serializes current UI options and copies the loadout string to your clipboard.",
-    Type = "Default",
-    CallBack = function()
-        generateCloudCode()
-    end
-})
+end)
+addButton(SettingsTab, "Generate Shareable Config Code", "Serializes current UI options and copies the loadout string to your clipboard.", function()
+    generateCloudCode()
+end)
 
-SettingsTab:Section("App Control Binds")
-SettingsTab:Keybind({
-    Title = "Aimbot Toggle Keybind",
-    Key = Config.AimbotToggleKey,
-    CallBack = function()
-        Config.AimbotEnabled = not Config.AimbotEnabled
-        notify("Aimbot Toggled", "Aimbot is now " .. (Config.AimbotEnabled and "ON" or "OFF"), 2)
-    end
-})
-SettingsTab:Keybind({
-    Title = "Silent Aim Toggle Keybind",
-    Key = Config.SilentAimToggleKey,
-    CallBack = function()
-        Config.SilentAimEnabled = not Config.SilentAimEnabled
-        notify("Silent Aim Toggled", "Silent Aim is now " .. (Config.SilentAimEnabled and "ON" or "OFF"), 2)
-    end
-})
-SettingsTab:Keybind({
-    Title = "Slow Walk Toggle Keybind",
-    Key = Config.SilentWalkKey,
-    CallBack = function()
-        Config.SilentWalkEnabled = not Config.SilentWalkEnabled
-        notify("Slow Walk Toggled", "Slow Walk is now " .. (Config.SilentWalkEnabled and "ON" or "OFF"), 2)
-    end
-})
+addSection(SettingsTab, "App Control Binds")
+addKeybind(SettingsTab, "Aimbot Toggle Keybind", Config.AimbotToggleKey, function()
+    Config.AimbotEnabled = not Config.AimbotEnabled
+    notify("Aimbot Toggled", "Aimbot is now " .. (Config.AimbotEnabled and "ON" or "OFF"), 2)
+end)
+addKeybind(SettingsTab, "Silent Aim Toggle Keybind", Config.SilentAimToggleKey, function()
+    Config.SilentAimEnabled = not Config.SilentAimEnabled
+    notify("Silent Aim Toggled", "Silent Aim is now " .. (Config.SilentAimEnabled and "ON" or "OFF"), 2)
+end)
+addKeybind(SettingsTab, "Slow Walk Toggle Keybind", Config.SilentWalkKey, function()
+    Config.SilentWalkEnabled = not Config.SilentWalkEnabled
+    notify("Slow Walk Toggled", "Slow Walk is now " .. (Config.SilentWalkEnabled and "ON" or "OFF"), 2)
+end)
 
 SettingsTab:Paragraph({
     Title = "Adaptive Framework",
     Content = "Clean modular optimization with customized Syde integrations."
 })
 
-notify("Framework Loaded", "Aimbot setup completed.", 3)
+notify("Framework Loaded", "Refit initialization complete.", 3)
 
 syde:LoadSaveConfig()
