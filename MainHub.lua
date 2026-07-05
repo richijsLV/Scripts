@@ -221,6 +221,17 @@ addButton(UniversalTab, "Gamepass Spoofer BETA", "Execute and load the beta game
     end
 end)
 
+addButton(UniversalTab, "Graphics Hub", "Can change ambience, animations, realism or just for more FPS...", function()
+    local success, err = pcall(function()
+        loadstring(game:HttpGet("https://github.com/richijsLV/Scripts/raw/refs/heads/main/Universal/GraphicsHub.lua"))()
+    end)
+    if success then
+        notify("Loaded Graphics Hub", "The Graphics Hub executed successfully.", 3)
+    else
+        notify("Loading Failed", "Graphics Hubs execution failed: " .. tostring(err), 4)
+    end
+end)
+
 -- ==========================================
 -- GAME SPECIFIC HUB TAB
 -- ==========================================
@@ -233,23 +244,6 @@ GameSpecificTab:Paragraph({
 -- ==========================================
 -- SETTINGS TAB
 -- ==========================================
-addSection(SettingsTab, "Local UI Styling Customizer")
-addDropdown(SettingsTab, "Accent Theme Color Selector", {"Blue", "Purple", "Pink", "Red", "Orange", "Yellow", "Green", "Graphite"}, "Select color theme...", false, function(opt)
-    if syde.Accents and syde.Accents[opt] then
-        syde.Accent = syde.Accents[opt]
-    end
-end)
-
-addSection(SettingsTab, "Appearance Overrides")
-addToggle(SettingsTab, "Dark Theme Mode", "Toggle between light and dark backgrounds.", true, "DarkThemeEnabled", function(v) 
-    app.Theme = v and cascade.Themes.Dark or cascade.Themes.Light 
-end)
-addToggle(SettingsTab, "Window Draggable", "Enable window movement via drag gestures.", true, "UiDragEnabled", function(v) 
-    window.Draggable = v 
-end)
-addToggle(SettingsTab, "Window Resizable", "Enable resizing borders on the main GUI frame.", true, "UiResizeEnabled", function(v) 
-    window.Resizable = v 
-end)
 
 addSection(SettingsTab, "App Control Binds")
 addKeybind(SettingsTab, "UI Open/Minimize Key", Config.UiToggleKey, function()
