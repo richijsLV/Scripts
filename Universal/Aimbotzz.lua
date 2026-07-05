@@ -21,6 +21,8 @@ local Config = {
     
     -- Custom profile parameters
     Smoothing = 5,
+    DynamicSmoothing = false,
+    ReactionDelay = 0, -- In milliseconds
     AccelerationCurve = 1.0,
     AimShake = 0.0,
     Overshoot = 0.0,
@@ -43,9 +45,10 @@ local Config = {
     
     -- Anti-Aim
     AntiAimEnabled = false,
-    AntiAimMode = "Spin",
+    AntiAimMode = "Spin", -- "Spin", "Jitter", "Side Jitter", "Backward", "Up-Down", "Custom Yaw", "Lurch"
     AntiAimSpeed = 10,
     AntiAimJitterAmplitude = 45,
+    AntiAimYawOffset = 90,
 
     -- Camera FOV
     CustomFOVEnabled = false,
@@ -84,6 +87,12 @@ local Config = {
     TargetIndicatorSize = 20,
     TargetIndicatorColor = Color3.fromRGB(54, 57, 241),
 
+    -- Silent Aim Visualizer
+    SilentVisualizerEnabled = false,
+    SilentVisualizerRadius = 6,
+    SilentVisualizerColor = Color3.fromRGB(255, 0, 0),
+    SilentVisualizerTransparency = 0.8,
+
     -- Player ESP Settings
     EspEnabled = false,
     EspBoxes = false,
@@ -108,10 +117,13 @@ local Config = {
     FogStart = 0,
     FogEnd = 10000,
     FogColor = Color3.fromRGB(128, 128, 128),
+    CustomLightingEnabled = false,
     ShadowsEnabled = true,
     AmbientColor = Color3.fromRGB(128, 128, 128),
+    OutdoorAmbientColor = Color3.fromRGB(128, 128, 128),
     Brightness = 2.0,
     ClockTime = 12.0,
+    ExposureCompensation = 0.0,
 }
 
 -- Services
@@ -141,8 +153,10 @@ local originalLighting = {
     FogStart = Lighting.FogStart,
     GlobalShadows = Lighting.GlobalShadows,
     Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
     Brightness = Lighting.Brightness,
-    ClockTime = Lighting.ClockTime
+    ClockTime = Lighting.ClockTime,
+    ExposureCompensation = Lighting.ExposureCompensation
 }
 local atmosphereCache = nil
 
@@ -152,7 +166,7 @@ local function applyLightingSettings()
     if Config.FogEnabled then
         if atmosphere then
             atmosphereCache = atmosphere
-            atmosphere.Parent = nil -- Temporarily strip Atmosphere object to let classic Fog work
+            atmosphere.Parent = nil -- Temporarily disable Atmospheric density to let customized fog display
         end
         Lighting.FogStart = Config.FogStart
         Lighting.FogEnd = Config.FogEnd
@@ -167,10 +181,21 @@ local function applyLightingSettings()
         Lighting.FogColor = originalLighting.FogColor
     end
     
-    Lighting.GlobalShadows = Config.ShadowsEnabled
-    Lighting.Ambient = Config.AmbientColor
-    Lighting.Brightness = Config.Brightness
-    Lighting.ClockTime = Config.ClockTime
+    if Config.CustomLightingEnabled then
+        Lighting.GlobalShadows = Config.ShadowsEnabled
+        Lighting.Ambient = Config.AmbientColor
+        Lighting.OutdoorAmbient = Config.OutdoorAmbientColor
+        Lighting.Brightness = Config.Brightness
+        Lighting.ClockTime = Config.ClockTime
+        Lighting.ExposureCompensation = Config.ExposureCompensation
+    else
+        Lighting.GlobalShadows = originalLighting.GlobalShadows
+        Lighting.Ambient = originalLighting.Ambient
+        Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
+        Lighting.Brightness = originalLighting.Brightness
+        Lighting.ClockTime = originalLighting.ClockTime
+        Lighting.ExposureCompensation = originalLighting.ExposureCompensation
+    end
 end
 
 -- Dynamic part detection (auto-fetch head)
@@ -294,7 +319,10 @@ local function updateAntiAim()
             if not char then return end
             local root = char:FindFirstChild("HumanoidRootPart")
             if not root then return end
+            
+            local rotX = 0
             local rotY = 0
+            
             if Config.AntiAimMode == "Spin" then
                 rotY = (tick() * Config.AntiAimSpeed * 10) % 360
             elseif Config.AntiAimMode == "Jitter" then
@@ -303,8 +331,14 @@ local function updateAntiAim()
                 rotY = (math.sin(tick() * Config.AntiAimSpeed) > 0 and 1 or -1) * Config.AntiAimJitterAmplitude
             elseif Config.AntiAimMode == "Backward" then
                 rotY = 180
+            elseif Config.AntiAimMode == "Up-Down" then
+                rotX = (tick() * 50 % 2 == 0) and 75 or -75
+            elseif Config.AntiAimMode == "Custom Yaw" then
+                rotY = Config.AntiAimYawOffset
+            elseif Config.AntiAimMode == "Lurch" then
+                rotY = math.random(-180, 180)
             end
-            root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(rotY), 0)
+            root.CFrame = root.CFrame * CFrame.Angles(math.rad(rotX), math.rad(rotY), 0)
         end)
     end
 end
@@ -340,6 +374,12 @@ targetBox.Thickness = 2
 targetBox.Size = Vector2.new(Config.TargetIndicatorSize, Config.TargetIndicatorSize)
 targetBox.Filled = false
 targetBox.Color = Config.TargetIndicatorColor
+
+local silentVisualizer = Drawing.new("Circle")
+silentVisualizer.Visible = false
+silentVisualizer.ZIndex = 998
+silentVisualizer.Thickness = 1
+silentVisualizer.Filled = true
 
 -- Core ESP Engine
 local espCache = {}
@@ -635,6 +675,7 @@ end
 local cachedClosestPart = nil
 local lockStartTime = 0
 local lastTarget = nil
+local reactionTargetTime = 0
 local autoShootNext = 0
 
 -- Autoshoot logic
@@ -798,67 +839,79 @@ end))
 RunService.RenderStepped:Connect(function()
     cachedClosestPart = getClosestPlayer()
     updateEsp()
+    applyLightingSettings() -- Continuously applies lighting variables to bypass game cycles
 
     if Config.AimbotEnabled and cachedClosestPart and isAimingHeld() and Camera then
         if cachedClosestPart ~= lastTarget then
             lastTarget = cachedClosestPart
             lockStartTime = tick()
+            reactionTargetTime = tick() + (Config.ReactionDelay / 1000)
         end
-        local timeElapsed = tick() - lockStartTime
-        local targetPos = cachedClosestPart.Position
-        if Config.Prediction and cachedClosestPart.Velocity then
-            targetPos = targetPos + cachedClosestPart.Velocity * Config.PredictionAmount
+        
+        -- Human reaction delay simulation
+        if tick() >= reactionTargetTime then
+            local timeElapsed = tick() - reactionTargetTime
+            local targetPos = cachedClosestPart.Position
+            if Config.Prediction and cachedClosestPart.Velocity then
+                targetPos = targetPos + cachedClosestPart.Velocity * Config.PredictionAmount
+            end
+            local currentCFrame = Camera.CFrame
+
+            -- Humanization parameters
+            local smooth, curve, shake, overshoot, undershoot, flick =
+                Config.Smoothing, Config.AccelerationCurve, Config.AimShake, Config.Overshoot, Config.Undershoot, Config.FlickTrackingBias
+            if Config.HumanizationMode == "Copied" then
+                shake = Profile.JitterScale * 8.5
+                smooth = math.clamp(Config.Smoothing * (1 / math.max(Profile.AverageSpeed / 10, 0.5)), 1, 100)
+                overshoot, undershoot, curve, flick = 0, 0, 1.0, 0.5
+            end
+
+            -- Apply jitter
+            if Config.HumanizationMode ~= "Custom" or Config.AimShake > 0 then
+                local jitterScale = (Config.HumanizationMode == "Copied") and shake or Config.AimShake * 0.08
+                targetPos = targetPos + Vector3.new(
+                    (math.random() - 0.5) * jitterScale,
+                    (math.random() - 0.5) * jitterScale,
+                    (math.random() - 0.5) * jitterScale
+                )
+            end
+
+            local rawTargetCFrame = CFrame.new(currentCFrame.Position, targetPos)
+
+            if overshoot > 0 and timeElapsed < 0.25 then
+                local angleFactor = 1 + (overshoot / 100) * math.exp(-timeElapsed * 10)
+                local rawAngles = {rawTargetCFrame:ToEulerAnglesYXZ()}
+                local curAngles = {currentCFrame:ToEulerAnglesYXZ()}
+                rawTargetCFrame = CFrame.fromEulerAnglesYXZ(
+                    curAngles[1] + (rawAngles[1] - curAngles[1]) * angleFactor,
+                    curAngles[2] + (rawAngles[2] - curAngles[2]) * angleFactor,
+                    0
+                )
+            end
+
+            local smoothingMultiplier = 1
+            if undershoot > 0 and timeElapsed > 0.1 then
+                smoothingMultiplier = 1 + (undershoot / 50)
+            end
+
+            local baseSmooth = math.clamp(smooth * smoothingMultiplier, 1, 100)
+            
+            -- Dynamic Smoothing calculations
+            if Config.DynamicSmoothing then
+                baseSmooth = baseSmooth + (math.sin(tick() * 5) * (baseSmooth * 0.25)) -- fluctuations of +-25%
+            end
+            
+            local step = 1 / baseSmooth
+            step = math.pow(step, curve)
+
+            if flick > 0.5 then
+                if timeElapsed < 0.15 then step = math.clamp(step * (flick * 2), 0, 1) end
+            else
+                if timeElapsed < 0.2 then step = step * (flick + 0.5) end
+            end
+
+            Camera.CFrame = currentCFrame:Lerp(rawTargetCFrame, math.clamp(step, 0, 1))
         end
-        local currentCFrame = Camera.CFrame
-
-        -- Humanization parameters
-        local smooth, curve, shake, overshoot, undershoot, flick =
-            Config.Smoothing, Config.AccelerationCurve, Config.AimShake, Config.Overshoot, Config.Undershoot, Config.FlickTrackingBias
-        if Config.HumanizationMode == "Copied" then
-            shake = Profile.JitterScale * 8.5
-            smooth = math.clamp(Config.Smoothing * (1 / math.max(Profile.AverageSpeed / 10, 0.5)), 1, 100)
-            overshoot, undershoot, curve, flick = 0, 0, 1.0, 0.5
-        end
-
-        -- Apply jitter
-        if Config.HumanizationMode ~= "Custom" or Config.AimShake > 0 then
-            local jitterScale = (Config.HumanizationMode == "Copied") and shake or Config.AimShake * 0.08
-            targetPos = targetPos + Vector3.new(
-                (math.random() - 0.5) * jitterScale,
-                (math.random() - 0.5) * jitterScale,
-                (math.random() - 0.5) * jitterScale
-            )
-        end
-
-        local rawTargetCFrame = CFrame.new(currentCFrame.Position, targetPos)
-
-        if overshoot > 0 and timeElapsed < 0.25 then
-            local angleFactor = 1 + (overshoot / 100) * math.exp(-timeElapsed * 10)
-            local rawAngles = {rawTargetCFrame:ToEulerAnglesYXZ()}
-            local curAngles = {currentCFrame:ToEulerAnglesYXZ()}
-            rawTargetCFrame = CFrame.fromEulerAnglesYXZ(
-                curAngles[1] + (rawAngles[1] - curAngles[1]) * angleFactor,
-                curAngles[2] + (rawAngles[2] - curAngles[2]) * angleFactor,
-                0
-            )
-        end
-
-        local smoothingMultiplier = 1
-        if undershoot > 0 and timeElapsed > 0.1 then
-            smoothingMultiplier = 1 + (undershoot / 50)
-        end
-
-        local baseSmooth = math.clamp(smooth * smoothingMultiplier, 1, 100)
-        local step = 1 / baseSmooth
-        step = math.pow(step, curve)
-
-        if flick > 0.5 then
-            if timeElapsed < 0.15 then step = math.clamp(step * (flick * 2), 0, 1) end
-        else
-            if timeElapsed < 0.2 then step = step * (flick + 0.5) end
-        end
-
-        Camera.CFrame = currentCFrame:Lerp(rawTargetCFrame, math.clamp(step, 0, 1))
     else
         lastTarget = nil
     end
@@ -890,6 +943,26 @@ RunService.RenderStepped:Connect(function()
         end
     else
         targetBox.Visible = false
+    end
+
+    -- Silent Aim Tracker Visualizer
+    if Config.SilentVisualizerEnabled and Config.SilentAimEnabled and cachedClosestPart then
+        local targetPos = cachedClosestPart.Position
+        if Config.Prediction and cachedClosestPart.Velocity then
+            targetPos = targetPos + cachedClosestPart.Velocity * Config.PredictionAmount
+        end
+        local pos, onScreen = getPositionOnScreen(targetPos)
+        if onScreen then
+            silentVisualizer.Visible = true
+            silentVisualizer.Position = pos
+            silentVisualizer.Radius = Config.SilentVisualizerRadius
+            silentVisualizer.Color = Config.SilentVisualizerColor
+            silentVisualizer.Transparency = Config.SilentVisualizerTransparency
+        else
+            silentVisualizer.Visible = false
+        end
+    else
+        silentVisualizer.Visible = false
     end
 end)
 
@@ -964,6 +1037,8 @@ titledRow(humanizeForm, "Humanization Mode", ""):Right():PopUpButton({
 
 local customParamsForm = humanizeSection:Form()
 titledRow(customParamsForm, "Smoothing", ""):Right():Slider({ Minimum=1, Maximum=100, Value=Config.Smoothing, ValueChanged=function(s,v) Config.Smoothing=v end })
+titledRow(customParamsForm, "Dynamic Smoothing", "Randomly shifts smoothing curves dynamically"):Right():Toggle({ Value=Config.DynamicSmoothing, ValueChanged=function(s,v) Config.DynamicSmoothing=v end })
+titledRow(customParamsForm, "Reaction Delay (ms)", "Human delay before targeting locks"):Right():Slider({ Minimum=0, Maximum=500, Value=Config.ReactionDelay, ValueChanged=function(s,v) Config.ReactionDelay=v end })
 titledRow(customParamsForm, "Acceleration Curve", ""):Right():Slider({ Minimum=1, Maximum=3, Value=Config.AccelerationCurve, ValueChanged=function(s,v) Config.AccelerationCurve=v end })
 titledRow(customParamsForm, "Aim Shake", ""):Right():Slider({ Minimum=0, Maximum=10, Value=Config.AimShake, ValueChanged=function(s,v) Config.AimShake=v end })
 titledRow(customParamsForm, "Overshoot", ""):Right():Slider({ Minimum=0, Maximum=100, Value=Config.Overshoot, ValueChanged=function(s,v) Config.Overshoot=v end })
@@ -1014,10 +1089,11 @@ titledRow(triggerForm, "Delay (ms)", ""):Right():PopUpButton({
 local aaSection = aimbotTab:PageSection({ Title = "Anti-Aim" })
 local aaForm = aaSection:Form()
 titledRow(aaForm, "Anti-Aim Enabled", ""):Right():Toggle({ Value=Config.AntiAimEnabled, ValueChanged=function(s,v) Config.AntiAimEnabled=v; updateAntiAim() end })
-local aaModes = {"Spin", "Jitter", "Side Jitter", "Backward"}
+local aaModes = {"Spin", "Jitter", "Side Jitter", "Backward", "Up-Down", "Custom Yaw", "Lurch"}
 titledRow(aaForm, "Mode", ""):Right():PopUpButton({ Options=aaModes, Value=1, ValueChanged=function(s, idx) Config.AntiAimMode=aaModes[idx]; updateAntiAim() end })
 titledRow(aaForm, "Speed", ""):Right():Slider({ Minimum=1, Maximum=20, Value=Config.AntiAimSpeed, ValueChanged=function(s,v) Config.AntiAimSpeed=v end })
 titledRow(aaForm, "Jitter Angle", ""):Right():Slider({ Minimum=0, Maximum=90, Value=Config.AntiAimJitterAmplitude, ValueChanged=function(s,v) Config.AntiAimJitterAmplitude=v end })
+titledRow(aaForm, "Custom Yaw Angle", ""):Right():Slider({ Minimum=0, Maximum=360, Value=Config.AntiAimYawOffset, ValueChanged=function(s,v) Config.AntiAimYawOffset=v end })
 
 -- Camera FOV Section
 local camSection = aimbotTab:PageSection({ Title = "Camera FOV" })
@@ -1106,15 +1182,36 @@ titledRow(chamsOutlineSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=2
     Config.ChamsOutlineColor = Color3.fromRGB(math.floor(Config.ChamsOutlineColor.R*255), math.floor(Config.ChamsOutlineColor.G*255), v)
 end })
 
--- 3. World & Lighting Tab
-local worldTab = visualsSection:Tab({ Selected = false, Title = "World & Lighting", Icon = cascade.Symbols.bolt })
+-- 3. Silent Aim Target Visualizer Tab
+local visualizerTab = visualsSection:Tab({ Selected = false, Title = "Silent Visualizer", Icon = cascade.Symbols.scope })
+local visualizerForm = visualizerTab:Form()
+titledRow(visualizerForm, "Show Silent Tracker", "Renders dynamic tracking dot directly on targeting point"):Right():Toggle({ Value=Config.SilentVisualizerEnabled, ValueChanged=function(s,v) Config.SilentVisualizerEnabled=v end })
+titledRow(visualizerForm, "Tracker Size (Radius)", ""):Right():Slider({ Minimum=2, Maximum=30, Value=Config.SilentVisualizerRadius, ValueChanged=function(s,v) Config.SilentVisualizerRadius=v end })
+titledRow(visualizerForm, "Transparency", ""):Right():Slider({ Minimum=0, Maximum=100, Value=math.floor(Config.SilentVisualizerTransparency*100), ValueChanged=function(s,v) Config.SilentVisualizerTransparency=v/100 end })
+
+local trackingColorSection = visualizerTab:PageSection({ Title = "Tracker Color" }):Form()
+titledRow(trackingColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.SilentVisualizerColor.R*255), ValueChanged=function(s,v)
+    Config.SilentVisualizerColor = Color3.fromRGB(v, math.floor(Config.SilentVisualizerColor.G*255), math.floor(Config.SilentVisualizerColor.B*255))
+end })
+titledRow(trackingColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.SilentVisualizerColor.G*255), ValueChanged=function(s,v)
+    Config.SilentVisualizerColor = Color3.fromRGB(math.floor(Config.SilentVisualizerColor.R*255), v, math.floor(Config.SilentVisualizerColor.B*255))
+end })
+titledRow(trackingColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.SilentVisualizerColor.B*255), ValueChanged=function(s,v)
+    Config.SilentVisualizerColor = Color3.fromRGB(math.floor(Config.SilentVisualizerColor.R*255), math.floor(Config.SilentVisualizerColor.G*255), v)
+end })
+
+-- 4. World & Lighting Tab
+local worldTab = visualsSection:Tab({ Selected = false, Title = "World Customization", Icon = cascade.Symbols.bolt })
 local worldForm = worldTab:Form()
 titledRow(worldForm, "Custom Fog Enabled", ""):Right():Toggle({ Value=Config.FogEnabled, ValueChanged=function(s,v) Config.FogEnabled=v; applyLightingSettings() end })
 titledRow(worldForm, "Fog Start", ""):Right():Slider({ Minimum=0, Maximum=5000, Value=Config.FogStart, ValueChanged=function(s,v) Config.FogStart=v; applyLightingSettings() end })
 titledRow(worldForm, "Fog End", ""):Right():Slider({ Minimum=100, Maximum=20000, Value=Config.FogEnd, ValueChanged=function(s,v) Config.FogEnd=v; applyLightingSettings() end })
+
+titledRow(worldForm, "Custom Lighting Enabled", "Enforces custom environment properties"):Right():Toggle({ Value=Config.CustomLightingEnabled, ValueChanged=function(s,v) Config.CustomLightingEnabled=v; applyLightingSettings() end })
 titledRow(worldForm, "Global Shadows", ""):Right():Toggle({ Value=Config.ShadowsEnabled, ValueChanged=function(s,v) Config.ShadowsEnabled=v; applyLightingSettings() end })
 titledRow(worldForm, "Brightness", ""):Right():Slider({ Minimum=0, Maximum=10, Value=math.floor(Config.Brightness), ValueChanged=function(s,v) Config.Brightness=v; applyLightingSettings() end })
-titledRow(worldForm, "Clock Time", ""):Right():Slider({ Minimum=0, Maximum=24, Value=math.floor(Config.ClockTime), ValueChanged=function(s,v) Config.ClockTime=v; applyLightingSettings() end })
+titledRow(worldForm, "Clock Time (0-24hr)", "Forces customized time settings"):Right():Slider({ Minimum=0, Maximum=24, Value=math.floor(Config.ClockTime), ValueChanged=function(s,v) Config.ClockTime=v; applyLightingSettings() end })
+titledRow(worldForm, "Exposure Compensation", ""):Right():Slider({ Minimum=0, Maximum=400, Value=math.floor((Config.ExposureCompensation + 2) * 100), ValueChanged=function(s,v) Config.ExposureCompensation = (v / 100) - 2; applyLightingSettings() end })
 
 local fogColorSection = worldTab:PageSection({ Title = "Fog Color" }):Form()
 titledRow(fogColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.FogColor.R*255), ValueChanged=function(s,v)
@@ -1144,7 +1241,21 @@ titledRow(ambientSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, V
     applyLightingSettings()
 end })
 
--- 4. FOV Circle Tab
+local outdoorAmbientSection = worldTab:PageSection({ Title = "Outdoor Ambient Color" }):Form()
+titledRow(outdoorAmbientSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.OutdoorAmbientColor.R*255), ValueChanged=function(s,v)
+    Config.OutdoorAmbientColor = Color3.fromRGB(v, math.floor(Config.OutdoorAmbientColor.G*255), math.floor(Config.OutdoorAmbientColor.B*255))
+    applyLightingSettings()
+end })
+titledRow(outdoorAmbientSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.OutdoorAmbientColor.G*255), ValueChanged=function(s,v)
+    Config.OutdoorAmbientColor = Color3.fromRGB(math.floor(Config.OutdoorAmbientColor.R*255), v, math.floor(Config.OutdoorAmbientColor.B*255))
+    applyLightingSettings()
+end })
+titledRow(outdoorAmbientSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.OutdoorAmbientColor.B*255), ValueChanged=function(s,v)
+    Config.OutdoorAmbientColor = Color3.fromRGB(math.floor(Config.OutdoorAmbientColor.R*255), math.floor(Config.OutdoorAmbientColor.G*255), v)
+    applyLightingSettings()
+end })
+
+-- 5. FOV Circle Tab
 local fovTab = visualsSection:Tab({ Selected = false, Title = "FOV Circle", Icon = cascade.Symbols.sunMax })
 local fovForm = fovTab:Form()
 titledRow(fovForm, "Show FOV Circle", ""):Right():Toggle({ Value=Config.FOVEnabled, ValueChanged=function(s,v) Config.FOVEnabled=v end })
@@ -1165,7 +1276,7 @@ titledRow(fovColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, 
     Config.FOVColor = Color3.fromRGB(math.floor(Config.FOVColor.R*255), math.floor(Config.FOVColor.G*255), v)
 end })
 
--- 5. Target Indicator Tab
+-- 6. Target Indicator Tab
 local indicatorTab = visualsSection:Tab({ Selected = false, Title = "Indicator", Icon = cascade.Symbols.sunMin })
 local indicatorForm = indicatorTab:Form()
 titledRow(indicatorForm, "Show Indicator", ""):Right():Toggle({ Value=Config.ShowTargetIndicator, ValueChanged=function(s,v) Config.ShowTargetIndicator=v end })
