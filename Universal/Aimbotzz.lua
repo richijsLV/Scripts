@@ -131,6 +131,101 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
+local HttpService = game:GetService("HttpService")
+
+-- Configuration Serialization Logic
+local FILE_NAME = "AdaptiveAimbot_Configs.json"
+local isFileSystemSupported = (writefile ~= nil and readfile ~= nil and isfile ~= nil)
+local memoryConfigs = {}
+
+local function serializeValue(val)
+    if typeof(val) == "Color3" then
+        return { __type = "Color3", r = val.R, g = val.G, b = val.B }
+    elseif typeof(val) == "EnumItem" then
+        return { __type = "EnumItem", enumType = tostring(val.EnumType), name = val.Name }
+    elseif typeof(val) == "table" then
+        local serialized = {}
+        for k, v in pairs(val) do
+            serialized[k] = serializeValue(v)
+        end
+        return serialized
+    end
+    return val
+end
+
+local function deserializeValue(val)
+    if typeof(val) == "table" then
+        if val.__type == "Color3" then
+            return Color3.new(val.r, val.g, val.b)
+        elseif val.__type == "EnumItem" then
+            local enumType = val.enumType
+            local name = val.name
+            local success, enumObj = pcall(function()
+                local rawType = string.match(enumType, "Enum%.(.+)") or enumType
+                return Enum[rawType][name]
+            end)
+            if success then return enumObj end
+        else
+            local deserialized = {}
+            for k, v in pairs(val) do
+                deserialized[k] = deserializeValue(v)
+            end
+            return deserialized
+        end
+    end
+    return val
+end
+
+local function readRawConfigs()
+    if not isFileSystemSupported then
+        return memoryConfigs
+    end
+    if not isfile(FILE_NAME) then
+        return {}
+    end
+    local success, result = pcall(function()
+        return HttpService:JSONDecode(readfile(FILE_NAME))
+    end)
+    return success and result or {}
+end
+
+local function writeRawConfigs(data)
+    if not isFileSystemSupported then
+        memoryConfigs = data
+        return
+    end
+    pcall(function()
+        writefile(FILE_NAME, HttpService:JSONEncode(data))
+    end)
+end
+
+local function saveConfig(name)
+    local allData = readRawConfigs()
+    local serialized = {}
+    for k, v in pairs(Config) do
+        if k ~= "DynamicPartList" then
+            serialized[k] = serializeValue(v)
+        end
+    end
+    allData[name] = serialized
+    writeRawConfigs(allData)
+end
+
+local function deleteConfig(name)
+    local allData = readRawConfigs()
+    allData[name] = nil
+    writeRawConfigs(allData)
+end
+
+local function listSavedConfigs()
+    local allData = readRawConfigs()
+    local list = {}
+    for k, _ in pairs(allData) do
+        table.insert(list, k)
+    end
+    table.sort(list)
+    return list
+end
 
 -- Dynamic Camera Reference Tracker
 local Camera = workspace.CurrentCamera
@@ -196,6 +291,24 @@ local function applyLightingSettings()
         Lighting.ClockTime = originalLighting.ClockTime
         Lighting.ExposureCompensation = originalLighting.ExposureCompensation
     end
+end
+
+-- Load Config logic dynamically assigned
+local function loadConfig(name)
+    local allData = readRawConfigs()
+    local data = allData[name]
+    if data then
+        for k, v in pairs(data) do
+            local deserialized = deserializeValue(v)
+            Config[k] = deserialized
+        end
+        -- Apply immediate reactive settings
+        updateFOV()
+        updateAntiAim()
+        applyLightingSettings()
+        return true
+    end
+    return false
 end
 
 -- Dynamic part detection (auto-fetch head)
@@ -1297,7 +1410,7 @@ end })
 local settingsSection = window:Section({ Title = "Settings", Disclosure = false })
 local configTab = settingsSection:Tab({ Selected = false, Title = "Configuration", Icon = cascade.Symbols.gear })
 
--- UI Styling / Theme & Accent Customization
+-- 1. UI Style Customization Page
 local appearanceForm = configTab:PageSection({ Title = "UI Style Customization" }):Form()
 titledRow(appearanceForm, "Dark Theme Mode", ""):Right():Toggle({ Value = app.Theme == cascade.Themes.Dark, ValueChanged = function(s,v) app.Theme = v and cascade.Themes.Dark or cascade.Themes.Light end })
 
@@ -1317,11 +1430,74 @@ titledRow(appearanceForm, "Search Bar Enabled", ""):Right():Toggle({ Value = win
 titledRow(appearanceForm, "Window Draggable", ""):Right():Toggle({ Value = window.Draggable, ValueChanged = function(s,v) window.Draggable = v end })
 titledRow(appearanceForm, "Window Resizable", ""):Right():Toggle({ Value = window.Resizable, ValueChanged = function(s,v) window.Resizable = v end })
 
--- Control Hotkeys Customization Page
+-- 2. Control Hotkeys Customization Page
 local appControlForm = configTab:PageSection({ Title = "App & Combat Toggle Controls" }):Form()
 titledRow(appControlForm, "UI Open/Minimize Key", ""):Right():KeybindField({ Value = Config.UiToggleKey, ValueChanged = function(s,v) Config.UiToggleKey = v end })
 titledRow(appControlForm, "Aimbot Master Switch Hotkey", ""):Right():KeybindField({ Value = Config.AimbotToggleKey, ValueChanged = function(s,v) Config.AimbotToggleKey = v end })
 titledRow(appControlForm, "Silent Aim Master Switch Hotkey", ""):Right():KeybindField({ Value = Config.SilentAimToggleKey, ValueChanged = function(s,v) Config.SilentAimToggleKey = v end })
+
+-- 3. Config File Manager Page
+local configManagerSection = configTab:PageSection({ Title = "Local Config Manager" })
+local configForm = configManagerSection:Form()
+
+local configNameInput = ""
+titledRow(configForm, "New Config Name", "Type a name to save/create"):Right():TextField({
+    Placeholder = "Enter configuration name...",
+    Value = "",
+    ValueChanged = function(s, v)
+        configNameInput = v
+    end
+})
+
+local saveRow = configForm:Row({ SearchIndex = "Save Config" })
+saveRow:Left():TitleStack({ Title = "Save Config", Subtitle = "Saves current values to local file" })
+saveRow:Right():Button({
+    Label = "Save settings",
+    Callback = function()
+        if configNameInput and configNameInput ~= "" then
+            saveConfig(configNameInput)
+        end
+    end
+})
+
+-- Build dynamic selection list from storage
+local loadedConfigsList = listSavedConfigs()
+if #loadedConfigsList == 0 then
+    loadedConfigsList = {"None"}
+end
+local selectedConfigIndex = 1
+
+titledRow(configForm, "Choose Stored Config", "Select profile to load/delete"):Right():PopUpButton({
+    Options = loadedConfigsList,
+    Value = 1,
+    ValueChanged = function(s, idx)
+        selectedConfigIndex = idx
+    end
+})
+
+local loadRow = configForm:Row({ SearchIndex = "Load Config" })
+loadRow:Left():TitleStack({ Title = "Apply Config", Subtitle = "Loads and runs selected profile" })
+loadRow:Right():Button({
+    Label = "Load selected",
+    Callback = function()
+        local selectedName = loadedConfigsList[selectedConfigIndex]
+        if selectedName and selectedName ~= "None" then
+            loadConfig(selectedName)
+        end
+    end
+})
+
+local deleteRow = configForm:Row({ SearchIndex = "Delete Config" })
+deleteRow:Left():TitleStack({ Title = "Delete Config", Subtitle = "Permanently deletes selected profile" })
+deleteRow:Right():Button({
+    Label = "Delete selected",
+    Callback = function()
+        local selectedName = loadedConfigsList[selectedConfigIndex]
+        if selectedName and selectedName ~= "None" then
+            deleteConfig(selectedName)
+        end
+    end
+})
 
 -- Initialize
 updateFOV()
