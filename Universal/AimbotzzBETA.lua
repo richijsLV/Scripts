@@ -264,6 +264,7 @@ local Mouse = LocalPlayer:GetMouse()
 
 -- Shortcuts
 local getPlayers = Players.GetPlayers
+local findFirstChild = game.FindFirstChild
 local getMouseLocation = UserInputService.GetMouseLocation
 
 -- Helper notifications
@@ -494,6 +495,30 @@ local function getClosestPlayer()
         end
     end
     return closestPart
+end
+
+-- Load Config logic dynamically assigned
+local function loadConfig(name)
+    local allData = readRawConfigs()
+    local data = allData[name]
+    if data then
+        for k, v in pairs(data) do
+            local deserialized = deserializeValue(v)
+            Config[k] = deserialized
+        end
+        
+        -- Cache configuration name as the last configuration loaded
+        if isFileSystemSupported then
+            pcall(writefile, LAST_CONFIG_FILE, name)
+        end
+        
+        -- Apply immediate reactive settings
+        updateFOV()
+        updateAntiAim()
+        applyLightingSettings()
+        return true
+    end
+    return false
 end
 
 -- Cubic Bezier Math Curve calculation
@@ -864,132 +889,113 @@ local function updateRadar()
     end
 end
 
--- Health change damage indicators loop
-local playerHealths = {}
+-- Adaptive Live Profile (Copied)
+local Profile = { AverageSpeed = 0, JitterScale = 0 }
+local naturalMovementData = {}
+local lastMousePos = getMouseLocation(UserInputService)
+
 task.spawn(function()
     while true do
-        task.wait(0.1)
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player == LocalPlayer then continue end
-            local char = player.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            local rpart = char and char:FindFirstChild("HumanoidRootPart")
-            if hum and rpart then
-                local lastH = playerHealths[player] or hum.MaxHealth
-                local curH = hum.Health
-                if curH < lastH then
-                    local diff = lastH - curH
-                    if diff > 0 and diff <= hum.MaxHealth then
-                        spawnDamageIndicator(rpart.Position, diff)
-                        if Config.HitMarkers then
-                            playHitmarkerSound()
-                            triggerHitmarkerFlash()
-                        end
+        task.wait(1 / 144)
+        local holding = true
+        if Config.HoldToAim then
+            if Config.AimMouseButton == "MouseButton1" then
+                holding = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+            elseif Config.AimMouseButton == "MouseButton2" then
+                holding = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            elseif Config.AimMouseButton == "Keyboard" then
+                holding = UserInputService:IsKeyDown(Config.AimKeyboardKey)
+            end
+        end
+        if not Config.AimbotEnabled or not holding then
+            local currentMousePos = getMouseLocation(UserInputService)
+            local delta = (currentMousePos - lastMousePos)
+            if delta.Magnitude > 0.1 then
+                table.insert(naturalMovementData, { delta = delta, speed = delta.Magnitude, time = tick() })
+                if #naturalMovementData > 144 then table.remove(naturalMovementData, 1) end
+                local speedSum, jitterSum = 0, 0
+                for i = 2, #naturalMovementData do
+                    speedSum = speedSum + naturalMovementData[i].speed
+                    local v1 = naturalMovementData[i-1].delta
+                    local v2 = naturalMovementData[i].delta
+                    if v1.Magnitude > 0 and v2.Magnitude > 0 then
+                        local dot = v1:Dot(v2) / (v1.Magnitude * v2.Magnitude)
+                        local angle = math.acos(math.clamp(dot, -1, 1))
+                        jitterSum = jitterSum + angle
                     end
                 end
-                playerHealths[player] = curH
-            else
-                playerHealths[player] = nil
+                local count = #naturalMovementData
+                if count > 1 then
+                    Profile.AverageSpeed = speedSum / count
+                    Profile.JitterScale = jitterSum / count
+                end
             end
+            lastMousePos = currentMousePos
         end
     end
 end)
 
--- Autoshoot logic
-local autoShootNext = 0
-task.spawn(function()
-    while true do
-        task.wait()
-        if Config.AutoShootEnabled and cachedClosestPart and isAimingHeld() then
-            local now = tick() * 1000
-            if now >= autoShootNext then
-                if Config.LegitMode then
-                    mouse1press()
-                    autoShootNext = now + Config.AutoShootDelay
-                else
-                    mouse1press()
-                    autoShootNext = now + 1
-                end
-            end
-        end
+-- FOV Changer
+local fovConnection
+local function updateFOV()
+    if fovConnection then fovConnection:Disconnect() end
+    if Config.CustomFOVEnabled then
+        fovConnection = RunService.RenderStepped:Connect(function()
+            if Camera then Camera.FieldOfView = Config.CustomFOV end
+        end)
+    else
+        if Camera then Camera.FieldOfView = 70 end
     end
-end)
+end
 
--- Triggerbot
-task.spawn(function()
-    while true do
-        task.wait(1/60)
-        if Config.TriggerbotEnabled then
-            local fire = false
-            if Config.TriggerbotMode == "Crosshair" then
-                local ray = Camera:ScreenPointToRay(getMouseLocation(UserInputService).X, getMouseLocation(UserInputService).Y)
-                local part = workspace:FindPartOnRay(ray, LocalPlayer.Character)
-                if part and part.Parent and part.Parent:FindFirstChildOfClass("Humanoid") then
-                    fire = true
-                end
-            elseif Config.TriggerbotMode == "Aimbot Lock" then
-                if cachedClosestPart then fire = true end
-            end
-            if fire then
-                if Config.TriggerbotDelay > 0 then
-                    task.wait(Config.TriggerbotDelay / 1000)
-                end
-                mouse1press()
-            end
-        end
-    end
-end)
-
--- Anti-AFK Setup
-local IDLE_KICK_MUTEX = false
-LocalPlayer.Idled:Connect(function()
-    if Config.AntiAfkEnabled and not IDLE_KICK_MUTEX then
-        IDLE_KICK_MUTEX = true
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-        task.wait(0.1)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-        IDLE_KICK_MUTEX = false
-    end
-end)
-
--- Ledge jump check
-task.spawn(function()
-    while true do
-        task.wait(0.05)
-        if Config.EdgeJumpEnabled then
+-- Anti-Aim Loop
+local antiAimConnection
+local function updateAntiAim()
+    if antiAimConnection then antiAimConnection:Disconnect() end
+    if Config.AntiAimEnabled then
+        antiAimConnection = RunService.Heartbeat:Connect(function()
             local char = LocalPlayer.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if root and hum and hum.FloorMaterial ~= Enum.Material.Air then
-                local velocity = root.Velocity
-                if velocity.Magnitude > 2 then
-                    local dir = velocity.Unit * 1.5
-                    local checkOrigin = root.Position + dir - Vector3.new(0, 2.5, 0)
-                    local rayResult = workspace:Raycast(checkOrigin, Vector3.new(0, -5, 0))
-                    if not rayResult then
-                        hum.Jump = true
-                    end
-                end
+            if not char then return end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+            
+            local rotX = 0
+            local rotY = 0
+            
+            if Config.AntiAimMode == "Spin" then
+                rotY = (tick() * Config.AntiAimSpeed * 10) % 360
+            elseif Config.AntiAimMode == "Jitter" then
+                rotY = math.sin(tick() * Config.AntiAimSpeed) * Config.AntiAimJitterAmplitude
+            elseif Config.AntiAimMode == "Side Jitter" then
+                rotY = (math.sin(tick() * Config.AntiAimSpeed) > 0 and 1 or -1) * Config.AntiAimJitterAmplitude
+            elseif Config.AntiAimMode == "Backward" then
+                rotY = 180
+            elseif Config.AntiAimMode == "Up-Down" then
+                rotX = (tick() * 50 % 2 == 0) and 75 or -75
+            elseif Config.AntiAimMode == "Custom Yaw" then
+                rotY = Config.AntiAimYawOffset
+            elseif Config.AntiAimMode == "Lurch" then
+                rotY = math.random(-180, 180)
             end
-        end
+            root.CFrame = root.CFrame * CFrame.Angles(math.rad(rotX), math.rad(rotY), 0)
+        end)
     end
-end)
+end
 
--- Silent walk Input logic
-local silentWalkActive = false
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-    if input.KeyCode == Config.SilentWalkKey then
-        silentWalkActive = true
+-- isAimingHeld
+local function isAimingHeld()
+    if not Config.HoldToAim then return true end
+    if Config.AimMouseButton == "MouseButton1" then
+        return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+    elseif Config.AimMouseButton == "MouseButton2" then
+        return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+    elseif Config.AimMouseButton == "Keyboard" then
+        return UserInputService:IsKeyDown(Config.AimKeyboardKey)
     end
-end)
-UserInputService.InputEnded:Connect(function(input)
-    if input.KeyCode == Config.SilentWalkKey then
-        silentWalkActive = false
-    end
-end)
+    return true
+end
 
--- Render Loop Updates & FPS Calculations
+-- Render Loop Updates & FPS Calculations (Restored precise Cascade tracking mathematics)
 local cachedClosestPart = nil
 local lastTarget = nil
 local lockStartTime = 0
@@ -1115,69 +1121,88 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- Aimbot Calculations
+    -- Aimbot Core Engine (Restored exact mathematical equations from reference Cascade script)
     if Config.AimbotEnabled and cachedClosestPart and isAimingHeld() and Camera then
         if cachedClosestPart ~= lastTarget then
             lastTarget = cachedClosestPart
             lockStartTime = tick()
-            reactionTargetTime = tick() + (Config.ReactionDelay / 1000)
         end
-        
-        if tick() >= reactionTargetTime then
-            local timeElapsed = tick() - reactionTargetTime
-            local targetPos = cachedClosestPart.Position
-            if Config.Prediction and cachedClosestPart.Velocity then
-                targetPos = targetPos + cachedClosestPart.Velocity * Config.PredictionAmount
+        local timeElapsed = tick() - lockStartTime
+        local targetPos = cachedClosestPart.Position
+        if Config.Prediction and cachedClosestPart.Velocity then
+            targetPos = targetPos + cachedClosestPart.Velocity * Config.PredictionAmount
+        end
+        local currentCFrame = Camera.CFrame
+
+        -- Humanization parameters
+        local smooth, curve, shake, overshoot, undershoot, flick =
+            Config.Smoothing, Config.AccelerationCurve, Config.AimShake, Config.Overshoot, Config.Undershoot, Config.FlickTrackingBias
+        if Config.HumanizationMode == "Copied" then
+            shake = Profile.JitterScale * 8.5
+            smooth = math.clamp(Config.Smoothing * (1 / math.max(Profile.AverageSpeed / 10, 0.5)), 1, 100)
+            overshoot, undershoot, curve, flick = 0, 0, 1.0, 0.5
+        end
+
+        -- Apply jitter
+        if Config.HumanizationMode ~= "Custom" or Config.AimShake > 0 then
+            local jitterScale = (Config.HumanizationMode == "Copied") and shake or Config.AimShake * 0.08
+            targetPos = targetPos + Vector3.new(
+                (math.random() - 0.5) * jitterScale,
+                (math.random() - 0.5) * jitterScale,
+                (math.random() - 0.5) * jitterScale
+            )
+        end
+
+        -- Safe mouse emulation bypass option
+        if Config.MouseEventEmulation and mousemoverel then
+            local screenPos, onScreen = getPositionOnScreen(targetPos)
+            if onScreen then
+                local mousePos = getMouseLocation(UserInputService)
+                local delta = (screenPos - mousePos) / smooth
+                mousemoverel(delta.X, delta.Y)
             end
-            local currentCFrame = Camera.CFrame
+        else
+            local rawTargetCFrame = CFrame.new(currentCFrame.Position, targetPos)
 
-            -- Dynamic humanization paths
-            local smooth, curve, shake = Config.Smoothing, Config.AccelerationCurve, Config.AimShake
-            local distance = (Camera.CFrame.Position - targetPos).Magnitude
-
-            -- Adaptive Smoothing Calculations
-            if Config.AdaptiveSmoothing then
-                if distance < 30 then
-                    smooth = smooth * 1.5
-                elseif distance > 150 then
-                    smooth = math.max(1, smooth * 0.7)
-                end
-            end
-
-            -- Dynamic Smoothing Waves
-            if Config.DynamicSmoothing then
-                smooth = smooth + (math.sin(tick() * 5) * (smooth * 0.25))
-            end
-
-            -- Jitter pattern additions
-            if Config.CursorJitter then
-                local jIntensity = Config.JitterIntensity * 0.05
-                targetPos = targetPos + Vector3.new(
-                    (math.random() - 0.5) * jIntensity,
-                    (math.random() - 0.5) * jIntensity,
-                    (math.random() - 0.5) * jIntensity
+            if overshoot > 0 and timeElapsed < 0.25 then
+                local angleFactor = 1 + (overshoot / 100) * math.exp(-timeElapsed * 10)
+                local rawAngles = {rawTargetCFrame:ToEulerAnglesYXZ()}
+                local curAngles = {currentCFrame:ToEulerAnglesYXZ()}
+                rawTargetCFrame = CFrame.fromEulerAnglesYXZ(
+                    curAngles[1] + (rawAngles[1] - curAngles[1]) * angleFactor,
+                    curAngles[2] + (rawAngles[2] - curAngles[2]) * angleFactor,
+                    0
                 )
             end
 
-            local rawTargetCFrame = CFrame.new(currentCFrame.Position, targetPos)
-            local step = 1 / math.clamp(smooth, 1, 100)
+            local smoothingMultiplier = 1
+            if undershoot > 0 and timeElapsed > 0.1 then
+                smoothingMultiplier = 1 + (undershoot / 50)
+            end
+
+            local baseSmooth = math.clamp(smooth * smoothingMultiplier, 1, 100)
+            
+            -- Dynamic Smoothing calculations
+            if Config.DynamicSmoothing then
+                baseSmooth = baseSmooth + (math.sin(tick() * 5) * (baseSmooth * 0.25))
+            end
+
+            local step = 1 / baseSmooth
             step = math.pow(step, curve)
 
-            -- Optional Mouse Emulation bypass paths
-            if Config.MouseEventEmulation and mousemoverel then
-                local screenPos, onScreen = getPositionOnScreen(targetPos)
-                if onScreen then
-                    local mousePos = getMouseLocation(UserInputService)
-                    local delta = (screenPos - mousePos) / smooth
-                    mousemoverel(delta.X, delta.Y)
-                end
-            elseif Config.BezierPathing then
+            if flick > 0.5 then
+                if timeElapsed < 0.15 then step = math.clamp(step * (flick * 2), 0, 1) end
+            else
+                if timeElapsed < 0.2 then step = step * (flick + 0.5) end
+            end
+
+            -- Optional Bezier Path interpolator
+            if Config.BezierPathing then
                 local p0 = currentCFrame.Position
                 local p3 = targetPos
                 local diff = (p3 - p0)
                 local p1 = p0 + currentCFrame.LookVector * (diff.Magnitude * 0.33)
                 local p2 = p3 - rawTargetCFrame.LookVector * (diff.Magnitude * 0.33)
-                
                 local bezierT = math.clamp(timeElapsed / (smooth * 0.1), 0, 1)
                 local currentPos = getBezierPoint(p0, p1, p2, p3, bezierT)
                 Camera.CFrame = CFrame.new(currentCFrame.Position, currentPos)
@@ -1277,6 +1302,7 @@ local function addSliders(tab, title, description, slidersData)
         warn("[Syde UI error] " .. tostring(title) .. ": Slider method not found")
         return nil 
     end
+    
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1285,20 +1311,32 @@ local function addSliders(tab, title, description, slidersData)
         })
     end)
     
-    if not success then
-        warn("[Syde UI error] " .. tostring(title) .. ": " .. tostring(result))
-        return nil
+    if success then return result end
+    
+    -- Fallback: If CreateSlider failed (e.g. singular Slider API), add them individually
+    for _, s in ipairs(slidersData) do
+        local singleMethod = tab.Slider or tab.AddSlider or tab.CreateSlider
+        if singleMethod then
+            pcall(function()
+                singleMethod(tab, {
+                    Title = s.Title,
+                    Description = description or "",
+                    Range = s.Range,
+                    Increment = s.Increment,
+                    StarterValue = s.StarterValue,
+                    Flag = s.Flag,
+                    CallBack = s.CallBack
+                })
+            end)
+        end
     end
-    return result
+    return nil
 end
 
 local function addDropdown(tab, title, options, placeholder, multi, callback)
     if not tab then return nil end
     local method = tab.Dropdown or tab.AddDropdown or tab.CreateDropdown
-    if not method then 
-        warn("[Syde UI error] " .. tostring(title) .. ": Dropdown method not found")
-        return nil 
-    end
+    if not method then return nil end
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1433,7 +1471,7 @@ local function requireTab(tab, name)
     return tab
 end
 
--- Corrected table-based Tab Initialization calls
+-- Table-based Tab Initialization
 local CombatTab = requireTab(Window:InitTab({ Title = "Combat" }), "Combat")
 local VisualsTab = requireTab(Window:InitTab({ Title = "Visuals" }), "Visuals")
 local MovementTab = requireTab(Window:InitTab({ Title = "Movement" }), "Movement")
@@ -1780,6 +1818,8 @@ task.spawn(function()
     task.wait(0.5) -- Safe structural rendering buffer
     
     local success, err = pcall(function()
+        updateFOV()
+        updateAntiAim()
         cachedClosestPart = getClosestPlayer()
         applyLightingSettings()
         
@@ -1798,10 +1838,6 @@ task.spawn(function()
     end
 end)
 
-syde:Notify({
-    Title = "UI Loaded",
-    Content = "Syde tabs initialized correctly.",
-    Duration = 3
-})
+notify("Framework Loaded", "Refit initialization complete.", 3)
 
 syde:LoadSaveConfig()
