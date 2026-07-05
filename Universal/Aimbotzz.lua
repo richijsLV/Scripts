@@ -104,6 +104,12 @@ local Config = {
     EspColor = Color3.fromRGB(255, 255, 255),
     EspTextSize = 13,
 
+    -- Out of View (OOF) Indicators Settings
+    OofIndicatorsEnabled = false,
+    OofIndicatorsSize = 10,
+    OofIndicatorsRadius = 150,
+    OofIndicatorsColor = Color3.fromRGB(255, 0, 0),
+
     -- Chams Settings
     ChamsEnabled = false,
     ChamsFillColor = Color3.fromRGB(255, 0, 0),
@@ -135,6 +141,7 @@ local HttpService = game:GetService("HttpService")
 
 -- Configuration Serialization Logic
 local FILE_NAME = "AdaptiveAimbot_Configs.json"
+local LAST_CONFIG_FILE = "AdaptiveAimbot_LastConfig.txt"
 local isFileSystemSupported = (writefile ~= nil and readfile ~= nil and isfile ~= nil)
 local memoryConfigs = {}
 
@@ -209,6 +216,11 @@ local function saveConfig(name)
     end
     allData[name] = serialized
     writeRawConfigs(allData)
+    
+    -- Cache configuration name as the last configuration loaded
+    if isFileSystemSupported then
+        pcall(writefile, LAST_CONFIG_FILE, name)
+    end
 end
 
 local function deleteConfig(name)
@@ -302,6 +314,12 @@ local function loadConfig(name)
             local deserialized = deserializeValue(v)
             Config[k] = deserialized
         end
+        
+        -- Cache configuration name as the last configuration loaded
+        if isFileSystemSupported then
+            pcall(writefile, LAST_CONFIG_FILE, name)
+        end
+        
         -- Apply immediate reactive settings
         updateFOV()
         updateAntiAim()
@@ -504,6 +522,7 @@ local function createEsp(player)
         Name = Drawing.new("Text"),
         Distance = Drawing.new("Text"),
         Tracer = Drawing.new("Line"),
+        OofIndicator = Drawing.new("Triangle"),
         HealthBarOutline = Drawing.new("Square"),
         HealthBar = Drawing.new("Square"),
         Highlight = nil
@@ -529,6 +548,12 @@ local function createEsp(player)
     drawings.Tracer.Visible = false
     drawings.Tracer.Thickness = 1
     drawings.Tracer.Color = Config.EspColor
+
+    drawings.OofIndicator.Visible = false
+    drawings.OofIndicator.Filled = true
+    drawings.OofIndicator.Color = Config.OofIndicatorsColor
+    drawings.OofIndicator.Thickness = 1
+    drawings.OofIndicator.Transparency = 1
 
     drawings.HealthBarOutline.Visible = false
     drawings.HealthBarOutline.Thickness = 1
@@ -625,11 +650,45 @@ local function updateEsp()
         local humanoid = char and char:FindFirstChildOfClass("Humanoid")
         local rpart = char and char:FindFirstChild("HumanoidRootPart")
         
-        if Config.EspEnabled and char and humanoid and rpart and humanoid.Health > 0 and not isTeammate then
+        if char and humanoid and rpart and humanoid.Health > 0 and not isTeammate then
             local rpartPos = rpart.Position
             local screenPos, onScreen = Camera:WorldToViewportPoint(rpartPos)
             
-            if onScreen then
+            -- Out of View (OOF) Indicators Rendering Logic
+            local isOffscreen = not onScreen or screenPos.Z < 0
+            if Config.OofIndicatorsEnabled and isOffscreen then
+                local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                local target2D = Vector2.new(screenPos.X, screenPos.Y)
+                
+                local dir = (target2D - screenCenter).Unit
+                if tostring(dir.X) == "nan" or tostring(dir.Y) == "nan" then
+                    dir = Vector2.new(0, -1)
+                end
+                
+                -- Invert vector coordinates to map correctly behind camera paths
+                if screenPos.Z < 0 then
+                    dir = -dir
+                end
+                
+                local arrowCenter = screenCenter + (dir * Config.OofIndicatorsRadius)
+                local perp = Vector2.new(-dir.Y, dir.X)
+                local size = Config.OofIndicatorsSize
+                
+                local pointA = arrowCenter + (dir * size)
+                local pointB = arrowCenter - (dir * size) + (perp * (size * 0.6))
+                local pointC = arrowCenter - (dir * size) - (perp * (size * 0.6))
+                
+                drawings.OofIndicator.Visible = true
+                drawings.OofIndicator.PointA = pointA
+                drawings.OofIndicator.PointB = pointB
+                drawings.OofIndicator.PointC = pointC
+                drawings.OofIndicator.Color = Config.OofIndicatorsColor
+            else
+                drawings.OofIndicator.Visible = false
+            end
+            
+            -- 2D Screen ESP Elements
+            if Config.EspEnabled and not isOffscreen then
                 local head = char:FindFirstChild("Head")
                 local topPos = head and (head.Position + Vector3.new(0, 1.6, 0)) or (rpartPos + Vector3.new(0, 3, 0))
                 local bottomPos = rpartPos - Vector3.new(0, 3, 0)
@@ -729,6 +788,7 @@ local function updateEsp()
             drawings.Name.Visible = false
             drawings.Distance.Visible = false
             drawings.Tracer.Visible = false
+            drawings.OofIndicator.Visible = false
             drawings.HealthBarOutline.Visible = false
             drawings.HealthBar.Visible = false
         end
@@ -1254,6 +1314,12 @@ local tracerOrigins = {"Bottom", "Center", "Mouse"}
 titledRow(espForm, "Snapline Origin", ""):Right():PopUpButton({ Options=tracerOrigins, Value=1, ValueChanged=function(s,idx) Config.EspTracerOrigin=tracerOrigins[idx] end })
 titledRow(espForm, "Text Size", ""):Right():Slider({ Minimum=8, Maximum=24, Value=Config.EspTextSize, ValueChanged=function(s,v) Config.EspTextSize=v end })
 
+-- ESP Out of View Indicators settings page
+local oofSection = espTab:PageSection({ Title = "Out of View Indicators" }):Form()
+titledRow(oofSection, "Enable OOF Indicators", ""):Right():Toggle({ Value=Config.OofIndicatorsEnabled, ValueChanged=function(s,v) Config.OofIndicatorsEnabled=v end })
+titledRow(oofSection, "Indicator Size", ""):Right():Slider({ Minimum=5, Maximum=30, Value=Config.OofIndicatorsSize, ValueChanged=function(s,v) Config.OofIndicatorsSize=v end })
+titledRow(oofSection, "Screen Radius", ""):Right():Slider({ Minimum=50, Maximum=400, Value=Config.OofIndicatorsRadius, ValueChanged=function(s,v) Config.OofIndicatorsRadius=v end })
+
 local espColorSection = espTab:PageSection({ Title = "ESP Colors" }):Form()
 titledRow(espColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.EspColor.R*255), ValueChanged=function(s,v)
     Config.EspColor = Color3.fromRGB(v, math.floor(Config.EspColor.G*255), math.floor(Config.EspColor.B*255))
@@ -1263,6 +1329,17 @@ titledRow(espColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255,
 end })
 titledRow(espColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.EspColor.B*255), ValueChanged=function(s,v)
     Config.EspColor = Color3.fromRGB(math.floor(Config.EspColor.R*255), math.floor(Config.EspColor.G*255), v)
+end })
+
+local oofColorSection = espTab:PageSection({ Title = "OOF Indicator Colors" }):Form()
+titledRow(oofColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.OofIndicatorsColor.R*255), ValueChanged=function(s,v)
+    Config.OofIndicatorsColor = Color3.fromRGB(v, math.floor(Config.OofIndicatorsColor.G*255), math.floor(Config.OofIndicatorsColor.B*255))
+end })
+titledRow(oofColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.OofIndicatorsColor.G*255), ValueChanged=function(s,v)
+    Config.OofIndicatorsColor = Color3.fromRGB(math.floor(Config.OofIndicatorsColor.R*255), v, math.floor(Config.OofIndicatorsColor.B*255))
+end })
+titledRow(oofColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.OofIndicatorsColor.B*255), ValueChanged=function(s,v)
+    Config.OofIndicatorsColor = Color3.fromRGB(math.floor(Config.OofIndicatorsColor.R*255), math.floor(Config.OofIndicatorsColor.G*255), v)
 end })
 
 -- 2. Chams Tab
@@ -1504,3 +1581,11 @@ updateFOV()
 updateAntiAim()
 applyLightingSettings()
 cachedClosestPart = getClosestPlayer()
+
+-- Auto Load Last Configuration File
+if isFileSystemSupported and isfile(LAST_CONFIG_FILE) then
+    local lastConfigName = readfile(LAST_CONFIG_FILE)
+    if lastConfigName and lastConfigName ~= "" then
+        loadConfig(lastConfigName)
+    end
+end
