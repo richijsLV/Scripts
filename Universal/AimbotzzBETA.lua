@@ -6,20 +6,41 @@ local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
+-- Aggressive Cleanup Hook (Destroys any cached/running Autofarm Syde UIs first)
+local coregui = (gethui and gethui()) or game:GetService("CoreGui")
+for _, child in ipairs(coregui:GetChildren()) do
+    if child:IsA("ScreenGui") and (child.Name == "sydeUILoader" or child.Name == "Syde" or child.Name == "loader" or child:FindFirstChild("loader") or child:FindFirstChild("main")) then
+        pcall(function() child:Destroy() end)
+    end
+end
+
 -- Load Syde
 local syde = loadstring(game:HttpGet("https://raw.githubusercontent.com/essencejs/syde/refs/heads/main/source", true))()
 
--- Branding Customization (Removed the default image asset that caused the Autofarm logo)
+-- Monkeypatch Modal to suppress internal library Frame errors
+local originalModal = syde.Modal
+syde.Modal = function(self, options)
+    local success, err = pcall(function()
+        if originalModal then
+            return originalModal(self, options)
+        end
+    end)
+    if not success then
+        warn("[Safe Mode] Suppressed library modal warning: " .. tostring(err))
+    end
+end
+
+-- Isolated Configuration Setup (Prevents loading incompatible settings from other scripts)
 syde:Load({
     Name = "Adaptive Aimbot",
     Status = "Stable",
     Accent = Color3.fromRGB(54, 57, 241),
     HitBox = Color3.fromRGB(54, 57, 241),
-    AutoLoad = true,
+    AutoLoad = false, -- Disabled to avoid loading corrupted Autofarm settings
     ConfigurationSaving = {
         Enabled = true,
-        FolderName = "AdaptiveAimbot",
-        FileName = "config"
+        FolderName = "AdaptiveAimbot_FreshV5", -- Unique folder
+        FileName = "aimbot_settings"
     }
 })
 
@@ -1207,29 +1228,45 @@ RunService.RenderStepped:Connect(function()
     updateRadar()
 end)
 
--- Safe UI API Wrappers to dynamically adjust across Syde updates
+-- Safe UI API Wrappers to dynamically adjust across Syde updates & Prevent any Nil value crashes
 local function addToggle(tab, title, description, defaultValue, flag, callback)
     if not tab then return nil end
     local method = tab.Toggle or tab.AddToggle or tab.CreateToggle
     if not method then return nil end
-    return method(tab, {
-        Title = title,
-        Description = description or "",
-        Value = defaultValue or false,
-        Config = true,
-        Flag = flag,
-        CallBack = callback
-    })
+    local success, result = pcall(function()
+        return method(tab, {
+            Title = title,
+            Description = description or "",
+            Value = defaultValue or false,
+            Config = true,
+            Flag = flag,
+            CallBack = callback
+        })
+    end)
+    return success and result or nil
 end
 
 local function addSliders(tab, title, description, slidersData)
     if not tab then return nil end
     local method = tab.CreateSlider or tab.Slider or tab.AddSlider or tab.SliderGroup or tab.CreateSliders
     if not method then return nil end
-    if method == tab.Slider or method == tab.AddSlider then
-        for _, s in ipairs(slidersData) do
+    
+    local success, result = pcall(function()
+        return method(tab, {
+            Title = title,
+            Description = description or "",
+            Sliders = slidersData
+        })
+    end)
+    
+    if success then return result end
+    
+    -- Fallback: If CreateSlider failed (e.g. singular Slider API), add them individually
+    for _, s in ipairs(slidersData) do
+        local singleMethod = tab.Slider or tab.AddSlider or tab.CreateSlider
+        if singleMethod then
             pcall(function()
-                method(tab, {
+                singleMethod(tab, {
                     Title = s.Title,
                     Description = description or "",
                     Range = s.Range,
@@ -1240,82 +1277,95 @@ local function addSliders(tab, title, description, slidersData)
                 })
             end)
         end
-        return nil
     end
-    return method(tab, {
-        Title = title,
-        Description = description or "",
-        Sliders = slidersData
-    })
+    return nil
 end
 
 local function addDropdown(tab, title, options, placeholder, multi, callback)
     if not tab then return nil end
     local method = tab.Dropdown or tab.AddDropdown or tab.CreateDropdown
     if not method then return nil end
-    return method(tab, {
-        Title = title,
-        Options = options,
-        PlaceHolder = placeholder or "Select...",
-        Multi = multi or false,
-        CallBack = callback
-    })
+    local success, result = pcall(function()
+        return method(tab, {
+            Title = title,
+            Options = options,
+            PlaceHolder = placeholder or "Select...",
+            Multi = multi or false,
+            CallBack = callback
+        })
+    end)
+    return success and result or nil
 end
 
 local function addColorPicker(tab, title, description, defaultColor, flag, callback)
     if not tab then return nil end
     local method = tab.ColorPicker or tab.AddColorPicker or tab.CreateColorPicker
     if not method then return nil end
-    return method(tab, {
-        Title = title,
-        Description = description or "",
-        Linkable = false,
-        Color = defaultColor,
-        Flag = flag,
-        CallBack = callback
-    })
+    local success, result = pcall(function()
+        return method(tab, {
+            Title = title,
+            Description = description or "",
+            Linkable = false,
+            Color = defaultColor,
+            Flag = flag,
+            CallBack = callback
+        })
+    end)
+    return success and result or nil
 end
 
 local function addTextInput(tab, title, placeholder, maxSize, callback)
     if not tab then return nil end
     local method = tab.TextInput or tab.AddTextInput or tab.CreateTextInput or tab.Input
     if not method then return nil end
-    return method(tab, {
-        Title = title,
-        PlaceHolder = placeholder or "Type here...",
-        MaxSize = maxSize or 100,
-        CallBack = callback
-    })
+    local success, result = pcall(function()
+        return method(tab, {
+            Title = title,
+            PlaceHolder = placeholder or "Type here...",
+            MaxSize = maxSize or 100,
+            CallBack = callback
+        })
+    end)
+    return success and result or nil
 end
 
 local function addButton(tab, title, description, callback)
     if not tab then return nil end
     local method = tab.Button or tab.AddButton or tab.CreateButton
     if not method then return nil end
-    return method(tab, {
-        Title = title,
-        Description = description or "",
-        Type = "Default",
-        CallBack = callback
-    })
+    local success, result = pcall(function()
+        return method(tab, {
+            Title = title,
+            Description = description or "",
+            Type = "Default",
+            CallBack = callback
+        })
+    end)
+    return success and result or nil
 end
 
 local function addKeybind(tab, title, key, callback)
     if not tab then return nil end
     local method = tab.Keybind or tab.AddKeybind or tab.CreateKeybind
     if not method then return nil end
-    return method(tab, {
-        Title = title,
-        Key = key,
-        CallBack = callback
-    })
+    local success, result = pcall(function()
+        return method(tab, {
+            Title = title,
+            Key = key,
+            CallBack = callback
+        })
+    end)
+    return success and result or nil
 end
 
 local function addSection(tab, title, icon)
     if not tab then return nil end
     local method = tab.Section or tab.AddSection or tab.CreateSection
     if not method then return nil end
-    return method(tab, title, icon)
+    local success, result = pcall(function()
+        return method(tab, title, icon)
+    end)
+    return success and result or nil
 end
 
 -- Main Syde Interface Initialization (Tabs require String arguments only!)
@@ -1420,7 +1470,7 @@ addSliders(CombatTab, "AA Rotation Speeds", "Manages yaw customization limits.",
 })
 
 -- ==========================================
--- VISUALS TAB
+-- VISUALS TAB (Proper Variable scoping - VisualsTab used exclusively)
 -- ==========================================
 addSection(VisualsTab, "ESP Rendering Elements")
 addToggle(VisualsTab, "Master ESP Toggle", "Render drawing frames around other active entities.", Config.EspEnabled, "EspEnabled", function(v) Config.EspEnabled = v end)
@@ -1660,6 +1710,10 @@ SettingsTab:Paragraph({
     Content = "Clean modular optimization with customized Syde integrations."
 })
 
-notify("Framework Loaded", "Refit initialization complete.", 3)
+-- Initialize
+cachedClosestPart = getClosestPlayer()
+applyLightingSettings()
+
+notify("Framework Loaded", "Aimbot setup completed.", 3)
 
 syde:LoadSaveConfig()
