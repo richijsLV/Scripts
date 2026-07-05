@@ -232,14 +232,33 @@ addButton(UniversalTab, "Graphics Hub", "Can change ambience, animations, realis
     end
 end)
 
+
 -- ==========================================
 -- GAME SPECIFIC HUB TAB
 -- ==========================================
-addSection(GameSpecificTab, "Development Status")
+-- ==========================================
+-- GAME SPECIFIC HUB TAB
+-- ==========================================
+addSection(GameSpecificTab, "Game Specific Scripts")
+
+addButton(GameSpecificTab, "DripStealer", "Can change Avatar", function()
+    local success, err = pcall(function()
+        loadstring(game:HttpGet("https://github.com/richijsLV/Scripts/raw/refs/heads/main/Universal/DripStealer.lua"))()
+    end)
+
+    if success then
+        notify("Loaded DripStealer", "DripStealer executed successfully.", 3)
+    else
+        notify("Loading Failed", "DripStealer execution failed: " .. tostring(err), 4)
+    end
+end)
+
 GameSpecificTab:Paragraph({
     Title = "Features Coming Soon",
-    Content = "Game-specific configurations, bypasses, and targeted script modules are currently under active development and will be released in an upcoming update."
+    Content = "More game-specific modules coming soon."
 })
+
+
 
 -- ==========================================
 -- SETTINGS TAB
@@ -247,7 +266,7 @@ GameSpecificTab:Paragraph({
 
 addSection(SettingsTab, "App Control Binds")
 addKeybind(SettingsTab, "UI Open/Minimize Key", Config.UiToggleKey, function()
-    window.Minimized = not window.Minimized
+    Window.Minimized = not Window.Minimized
 end)
 
 SettingsTab:Paragraph({
