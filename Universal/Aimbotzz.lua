@@ -11,6 +11,11 @@ local Config = {
     AimbotEnabled = false,
     SilentAimEnabled = false,
     
+    -- Keybinds
+    UiToggleKey = Enum.KeyCode.RightControl,
+    AimbotToggleKey = Enum.KeyCode.Delete,
+    SilentAimToggleKey = Enum.KeyCode.Insert,
+    
     -- Humanization mode: "Custom" or "Copied"
     HumanizationMode = "Custom",
     
@@ -24,27 +29,27 @@ local Config = {
 
     -- Autoshoot & Wallbang
     AutoShootEnabled = false,
-    AutoShootDelay = 150, -- now populated from dropdown
+    AutoShootDelay = 150,
     AutoWallbangEnabled = false,
-    MaxWalls = 1,          -- 0,1,2
-    MaxWallThickness = 2,  -- from dropdown
-    LegitMode = true,      -- false = rage (instant, full wallbang)
+    MaxWalls = 1,
+    MaxWallThickness = 2,
+    LegitMode = true,
     
     -- Triggerbot
     TriggerbotEnabled = false,
     TriggerbotKey = "MouseButton1",
-    TriggerbotDelay = 0,  -- from dropdown
-    TriggerbotMode = "Aimbot Lock", -- "Crosshair", "Aimbot Lock"
+    TriggerbotDelay = 0,
+    TriggerbotMode = "Aimbot Lock",
     
     -- Anti-Aim
     AntiAimEnabled = false,
-    AntiAimMode = "Spin", -- "Spin", "Jitter", "Side Jitter", "Backward"
+    AntiAimMode = "Spin",
     AntiAimSpeed = 10,
     AntiAimJitterAmplitude = 45,
 
     -- Camera FOV
     CustomFOVEnabled = false,
-    CustomFOV = 103,
+    CustomFOV = 70,
 
     -- Hold controls
     HoldToAim = true,
@@ -53,7 +58,7 @@ local Config = {
 
     -- Silent Aim Options
     Method = "Raycast",
-    TargetPart = "Auto",   -- "Auto" = auto-detect head, else part name
+    TargetPart = "Auto",
     DynamicPartList = {},
 
     -- Checks
@@ -85,6 +90,8 @@ local Config = {
     EspNames = false,
     EspDistances = false,
     EspHealth = false,
+    EspTracers = false,
+    EspTracerOrigin = "Bottom",
     EspColor = Color3.fromRGB(255, 255, 255),
     EspTextSize = 13,
 
@@ -113,7 +120,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
 
--- Dynamic Camera Reference Tracker (Prevents failures on player respawning)
+-- Dynamic Camera Reference Tracker
 local Camera = workspace.CurrentCamera
 workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
     Camera = workspace.CurrentCamera
@@ -127,7 +134,7 @@ local getPlayers = Players.GetPlayers
 local findFirstChild = game.FindFirstChild
 local getMouseLocation = UserInputService.GetMouseLocation
 
--- Lighting Backup for Safe Restoration
+-- Lighting & Atmosphere Backup
 local originalLighting = {
     FogColor = Lighting.FogColor,
     FogEnd = Lighting.FogEnd,
@@ -137,13 +144,24 @@ local originalLighting = {
     Brightness = Lighting.Brightness,
     ClockTime = Lighting.ClockTime
 }
+local atmosphereCache = nil
 
 local function applyLightingSettings()
+    local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+    
     if Config.FogEnabled then
+        if atmosphere then
+            atmosphereCache = atmosphere
+            atmosphere.Parent = nil -- Temporarily strip Atmosphere object to let classic Fog work
+        end
         Lighting.FogStart = Config.FogStart
         Lighting.FogEnd = Config.FogEnd
         Lighting.FogColor = Config.FogColor
     else
+        if atmosphereCache and not Lighting:FindFirstChildOfClass("Atmosphere") then
+            atmosphereCache.Parent = Lighting
+            atmosphereCache = nil
+        end
         Lighting.FogStart = originalLighting.FogStart
         Lighting.FogEnd = originalLighting.FogEnd
         Lighting.FogColor = originalLighting.FogColor
@@ -259,14 +277,10 @@ local function updateFOV()
     if fovConnection then fovConnection:Disconnect() end
     if Config.CustomFOVEnabled then
         fovConnection = RunService.RenderStepped:Connect(function()
-            if Camera then
-                Camera.FieldOfView = Config.CustomFOV
-            end
+            if Camera then Camera.FieldOfView = Config.CustomFOV end
         end)
     else
-        if Camera then
-            Camera.FieldOfView = 70 -- reset
-        end
+        if Camera then Camera.FieldOfView = 70 end
     end
 end
 
@@ -327,7 +341,7 @@ targetBox.Size = Vector2.new(Config.TargetIndicatorSize, Config.TargetIndicatorS
 targetBox.Filled = false
 targetBox.Color = Config.TargetIndicatorColor
 
--- Core ESP & Chams Engine
+-- Core ESP Engine
 local espCache = {}
 
 local function createEsp(player)
@@ -336,6 +350,7 @@ local function createEsp(player)
         Box = Drawing.new("Square"),
         Name = Drawing.new("Text"),
         Distance = Drawing.new("Text"),
+        Tracer = Drawing.new("Line"),
         HealthBarOutline = Drawing.new("Square"),
         HealthBar = Drawing.new("Square"),
         Highlight = nil
@@ -357,6 +372,10 @@ local function createEsp(player)
     drawings.Distance.Center = true
     drawings.Distance.Outline = true
     drawings.Distance.Color = Config.EspColor
+
+    drawings.Tracer.Visible = false
+    drawings.Tracer.Thickness = 1
+    drawings.Tracer.Color = Config.EspColor
 
     drawings.HealthBarOutline.Visible = false
     drawings.HealthBarOutline.Thickness = 1
@@ -471,6 +490,7 @@ local function updateEsp()
                     local boxX = topScreen.X - (boxWidth / 2)
                     local boxY = topScreen.Y
                     
+                    -- Box
                     if Config.EspBoxes then
                         drawings.Box.Visible = true
                         drawings.Box.Size = Vector2.new(boxWidth, boxHeight)
@@ -480,6 +500,7 @@ local function updateEsp()
                         drawings.Box.Visible = false
                     end
                     
+                    -- Name
                     if Config.EspNames then
                         drawings.Name.Visible = true
                         drawings.Name.Text = player.Name
@@ -490,6 +511,7 @@ local function updateEsp()
                         drawings.Name.Visible = false
                     end
                     
+                    -- Distance
                     if Config.EspDistances then
                         drawings.Distance.Visible = true
                         local dist = math.floor((Camera.CFrame.Position - rpartPos).Magnitude)
@@ -500,7 +522,24 @@ local function updateEsp()
                     else
                         drawings.Distance.Visible = false
                     end
+
+                    -- Tracers / Snaplines
+                    if Config.EspTracers then
+                        drawings.Tracer.Visible = true
+                        local origin = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                        if Config.EspTracerOrigin == "Center" then
+                            origin = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                        elseif Config.EspTracerOrigin == "Mouse" then
+                            origin = getMouseLocation(UserInputService)
+                        end
+                        drawings.Tracer.From = origin
+                        drawings.Tracer.To = Vector2.new(screenPos.X, screenPos.Y)
+                        drawings.Tracer.Color = Config.EspColor
+                    else
+                        drawings.Tracer.Visible = false
+                    end
                     
+                    -- Health Bar
                     if Config.EspHealth then
                         drawings.HealthBarOutline.Visible = true
                         drawings.HealthBarOutline.Position = Vector2.new(boxX - 6, boxY)
@@ -520,6 +559,7 @@ local function updateEsp()
                     drawings.Box.Visible = false
                     drawings.Name.Visible = false
                     drawings.Distance.Visible = false
+                    drawings.Tracer.Visible = false
                     drawings.HealthBarOutline.Visible = false
                     drawings.HealthBar.Visible = false
                 end
@@ -527,6 +567,7 @@ local function updateEsp()
                 drawings.Box.Visible = false
                 drawings.Name.Visible = false
                 drawings.Distance.Visible = false
+                drawings.Tracer.Visible = false
                 drawings.HealthBarOutline.Visible = false
                 drawings.HealthBar.Visible = false
             end
@@ -534,6 +575,7 @@ local function updateEsp()
             drawings.Box.Visible = false
             drawings.Name.Visible = false
             drawings.Distance.Visible = false
+            drawings.Tracer.Visible = false
             drawings.HealthBarOutline.Visible = false
             drawings.HealthBar.Visible = false
         end
@@ -660,7 +702,7 @@ local function getWallPenetrationIgnoreList(origin, targetPos, maxWalls)
         -- It's a wall
         table.insert(walls, part)
         if #walls > maxWalls then return nil end
-        -- Compute wall thickness: we approximate by measuring distance from entry to exit
+        -- Compute wall thickness
         local backResult = workspace:Raycast(result.Position + rayDir * part.Size.Magnitude, -rayDir * part.Size.Magnitude, rayParams)
         if backResult and backResult.Instance == part then
             local thickness = (backResult.Position - result.Position).Magnitude
@@ -859,8 +901,8 @@ local app = cascade.New({
 })
 
 local window = app:Window({
-    Title = "Aimbotzz",
-    Subtitle = "Build: BETA",
+    Title = "Adaptive Aimbot",
+    Subtitle = "Cascade Interface",
     Size = UDim2.fromOffset(850, 530),
     Draggable = true,
     Resizable = true,
@@ -869,7 +911,7 @@ local window = app:Window({
     CanMinimize = true,
     CanZoom = true,
     Dropshadow = true,
-    UIBlur = true,
+    UIBlur = false,
 })
 
 local function titledRow(parent, title, subtitle)
@@ -877,6 +919,18 @@ local function titledRow(parent, title, subtitle)
     row:Left():TitleStack({ Title = title, Subtitle = subtitle })
     return row
 end
+
+-- Input connection for hotkeys
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+    if gameProcessedEvent then return end
+    if input.KeyCode == Config.UiToggleKey then
+        window.Minimized = not window.Minimized
+    elseif input.KeyCode == Config.AimbotToggleKey then
+        Config.AimbotEnabled = not Config.AimbotEnabled
+    elseif input.KeyCode == Config.SilentAimToggleKey then
+        Config.SilentAimEnabled = not Config.SilentAimEnabled
+    end
+end)
 
 -- Pre‑define arrays to avoid inline indexing syntax issues
 local wallOptions = {0, 1, 2}
@@ -995,7 +1049,7 @@ titledRow(filterForm, "Hit Chance", ""):Right():Slider({ Minimum=0, Maximum=100,
 titledRow(filterForm, "Prediction", ""):Right():Toggle({ Value=Config.Prediction, ValueChanged=function(s,v) Config.Prediction=v end })
 titledRow(filterForm, "Prediction Amount", ""):Right():Stepper({ Minimum=0.001, Maximum=1.0, Step=0.005, Fielded=true, Value=Config.PredictionAmount, ValueChanged=function(s,v) Config.PredictionAmount=v end })
 
--- Visuals Section (Revamped, Expanded, and Highly Customizable)
+-- Visuals Section
 local visualsSection = window:Section({ Title = "Visuals", Disclosure = false })
 
 -- 1. Player ESP Tab
@@ -1006,36 +1060,51 @@ titledRow(espForm, "Show Boxes", ""):Right():Toggle({ Value=Config.EspBoxes, Val
 titledRow(espForm, "Show Names", ""):Right():Toggle({ Value=Config.EspNames, ValueChanged=function(s,v) Config.EspNames=v end })
 titledRow(espForm, "Show Distance", ""):Right():Toggle({ Value=Config.EspDistances, ValueChanged=function(s,v) Config.EspDistances=v end })
 titledRow(espForm, "Show Health Bar", ""):Right():Toggle({ Value=Config.EspHealth, ValueChanged=function(s,v) Config.EspHealth=v end })
+titledRow(espForm, "Show Snaplines / Tracers", ""):Right():Toggle({ Value=Config.EspTracers, ValueChanged=function(s,v) Config.EspTracers=v end })
+local tracerOrigins = {"Bottom", "Center", "Mouse"}
+titledRow(espForm, "Snapline Origin", ""):Right():PopUpButton({ Options=tracerOrigins, Value=1, ValueChanged=function(s,idx) Config.EspTracerOrigin=tracerOrigins[idx] end })
 titledRow(espForm, "Text Size", ""):Right():Slider({ Minimum=8, Maximum=24, Value=Config.EspTextSize, ValueChanged=function(s,v) Config.EspTextSize=v end })
 
-local espColorSection = espTab:PageSection({ Title = "ESP Color Settings" }):Form()
-local function espRGB() return Config.EspColor.R*255, Config.EspColor.G*255, Config.EspColor.B*255 end
-local er, eg, eb = espRGB()
-titledRow(espColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=er, ValueChanged=function(s,v) Config.EspColor=Color3.fromRGB(v, eg, eb); er=v end })
-titledRow(espColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=eg, ValueChanged=function(s,v) Config.EspColor=Color3.fromRGB(er, v, eb); eg=v end })
-titledRow(espColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=eb, ValueChanged=function(s,v) Config.EspColor=Color3.fromRGB(er, eg, v); eb=v end })
+local espColorSection = espTab:PageSection({ Title = "ESP Colors" }):Form()
+titledRow(espColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.EspColor.R*255), ValueChanged=function(s,v)
+    Config.EspColor = Color3.fromRGB(v, math.floor(Config.EspColor.G*255), math.floor(Config.EspColor.B*255))
+end })
+titledRow(espColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.EspColor.G*255), ValueChanged=function(s,v)
+    Config.EspColor = Color3.fromRGB(math.floor(Config.EspColor.R*255), v, math.floor(Config.EspColor.B*255))
+end })
+titledRow(espColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.EspColor.B*255), ValueChanged=function(s,v)
+    Config.EspColor = Color3.fromRGB(math.floor(Config.EspColor.R*255), math.floor(Config.EspColor.G*255), v)
+end })
 
 -- 2. Chams Tab
 local chamsTab = visualsSection:Tab({ Selected = false, Title = "Chams", Icon = cascade.Symbols.squareAndLineVerticalAndSquare })
 local chamsForm = chamsTab:Form()
 titledRow(chamsForm, "Enable Chams", ""):Right():Toggle({ Value=Config.ChamsEnabled, ValueChanged=function(s,v) Config.ChamsEnabled=v end })
-titledRow(chamsForm, "Always On Top", "Render through walls"):Right():Toggle({ Value=Config.ChamsAlwaysOnTop, ValueChanged=function(s,v) Config.ChamsAlwaysOnTop=v end })
+titledRow(chamsForm, "Always On Top", ""):Right():Toggle({ Value=Config.ChamsAlwaysOnTop, ValueChanged=function(s,v) Config.ChamsAlwaysOnTop=v end })
 titledRow(chamsForm, "Fill Transparency", ""):Right():Slider({ Minimum=0, Maximum=100, Value=math.floor(Config.ChamsFillTransparency*100), ValueChanged=function(s,v) Config.ChamsFillTransparency=v/100 end })
 titledRow(chamsForm, "Outline Transparency", ""):Right():Slider({ Minimum=0, Maximum=100, Value=math.floor(Config.ChamsOutlineTransparency*100), ValueChanged=function(s,v) Config.ChamsOutlineTransparency=v/100 end })
 
-local chamsFillSection = chamsTab:PageSection({ Title = "Chams Fill Color" }):Form()
-local function cfRGB() return Config.ChamsFillColor.R*255, Config.ChamsFillColor.G*255, Config.ChamsFillColor.B*255 end
-local cfr, cfg, cfb = cfRGB()
-titledRow(chamsFillSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=cfr, ValueChanged=function(s,v) Config.ChamsFillColor=Color3.fromRGB(v, cfg, cfb); cfr=v end })
-titledRow(chamsFillSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=cfg, ValueChanged=function(s,v) Config.ChamsFillColor=Color3.fromRGB(cfr, v, cfb); cfg=v end })
-titledRow(chamsFillSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=cfb, ValueChanged=function(s,v) Config.ChamsFillColor=Color3.fromRGB(cfr, cfg, v); cfb=v end })
+local chamsFillSection = chamsTab:PageSection({ Title = "Fill Colors" }):Form()
+titledRow(chamsFillSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.ChamsFillColor.R*255), ValueChanged=function(s,v)
+    Config.ChamsFillColor = Color3.fromRGB(v, math.floor(Config.ChamsFillColor.G*255), math.floor(Config.ChamsFillColor.B*255))
+end })
+titledRow(chamsFillSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.ChamsFillColor.G*255), ValueChanged=function(s,v)
+    Config.ChamsFillColor = Color3.fromRGB(math.floor(Config.ChamsFillColor.R*255), v, math.floor(Config.ChamsFillColor.B*255))
+end })
+titledRow(chamsFillSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.ChamsFillColor.B*255), ValueChanged=function(s,v)
+    Config.ChamsFillColor = Color3.fromRGB(math.floor(Config.ChamsFillColor.R*255), math.floor(Config.ChamsFillColor.G*255), v)
+end })
 
-local chamsOutlineSection = chamsTab:PageSection({ Title = "Chams Outline Color" }):Form()
-local function coRGB() return Config.ChamsOutlineColor.R*255, Config.ChamsOutlineColor.G*255, Config.ChamsOutlineColor.B*255 end
-local cor, cog, cob = coRGB()
-titledRow(chamsOutlineSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=cor, ValueChanged=function(s,v) Config.ChamsOutlineColor=Color3.fromRGB(v, cog, cob); cor=v end })
-titledRow(chamsOutlineSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=cog, ValueChanged=function(s,v) Config.ChamsOutlineColor=Color3.fromRGB(cor, v, cob); cog=v end })
-titledRow(chamsOutlineSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=cob, ValueChanged=function(s,v) Config.ChamsOutlineColor=Color3.fromRGB(cor, cog, v); cob=v end })
+local chamsOutlineSection = chamsTab:PageSection({ Title = "Outline Colors" }):Form()
+titledRow(chamsOutlineSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.ChamsOutlineColor.R*255), ValueChanged=function(s,v)
+    Config.ChamsOutlineColor = Color3.fromRGB(v, math.floor(Config.ChamsOutlineColor.G*255), math.floor(Config.ChamsOutlineColor.B*255))
+end })
+titledRow(chamsOutlineSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.ChamsOutlineColor.G*255), ValueChanged=function(s,v)
+    Config.ChamsOutlineColor = Color3.fromRGB(math.floor(Config.ChamsOutlineColor.R*255), v, math.floor(Config.ChamsOutlineColor.B*255))
+end })
+titledRow(chamsOutlineSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.ChamsOutlineColor.B*255), ValueChanged=function(s,v)
+    Config.ChamsOutlineColor = Color3.fromRGB(math.floor(Config.ChamsOutlineColor.R*255), math.floor(Config.ChamsOutlineColor.G*255), v)
+end })
 
 -- 3. World & Lighting Tab
 local worldTab = visualsSection:Tab({ Selected = false, Title = "World & Lighting", Icon = cascade.Symbols.bolt })
@@ -1048,18 +1117,32 @@ titledRow(worldForm, "Brightness", ""):Right():Slider({ Minimum=0, Maximum=10, V
 titledRow(worldForm, "Clock Time", ""):Right():Slider({ Minimum=0, Maximum=24, Value=math.floor(Config.ClockTime), ValueChanged=function(s,v) Config.ClockTime=v; applyLightingSettings() end })
 
 local fogColorSection = worldTab:PageSection({ Title = "Fog Color" }):Form()
-local function fogRGB() return Config.FogColor.R*255, Config.FogColor.G*255, Config.FogColor.B*255 end
-local fgr, fgg, fgb = fogRGB()
-titledRow(fogColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=fgr, ValueChanged=function(s,v) Config.FogColor=Color3.fromRGB(v, fgg, fgb); fgr=v; applyLightingSettings() end })
-titledRow(fogColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=fgg, ValueChanged=function(s,v) Config.FogColor=Color3.fromRGB(fgr, v, fgb); fgg=v; applyLightingSettings() end })
-titledRow(fogColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=fgb, ValueChanged=function(s,v) Config.FogColor=Color3.fromRGB(fgr, fgg, v); fgb=v; applyLightingSettings() end })
+titledRow(fogColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.FogColor.R*255), ValueChanged=function(s,v)
+    Config.FogColor = Color3.fromRGB(v, math.floor(Config.FogColor.G*255), math.floor(Config.FogColor.B*255))
+    applyLightingSettings()
+end })
+titledRow(fogColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.FogColor.G*255), ValueChanged=function(s,v)
+    Config.FogColor = Color3.fromRGB(math.floor(Config.FogColor.R*255), v, math.floor(Config.FogColor.B*255))
+    applyLightingSettings()
+end })
+titledRow(fogColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.FogColor.B*255), ValueChanged=function(s,v)
+    Config.FogColor = Color3.fromRGB(math.floor(Config.FogColor.R*255), math.floor(Config.FogColor.G*255), v)
+    applyLightingSettings()
+end })
 
 local ambientSection = worldTab:PageSection({ Title = "Ambient Color" }):Form()
-local function ambRGB() return Config.AmbientColor.R*255, Config.AmbientColor.G*255, Config.AmbientColor.B*255 end
-local ambr, ambg, ambb = ambRGB()
-titledRow(ambientSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=ambr, ValueChanged=function(s,v) Config.AmbientColor=Color3.fromRGB(v, ambg, ambb); ambr=v; applyLightingSettings() end })
-titledRow(ambientSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=ambg, ValueChanged=function(s,v) Config.AmbientColor=Color3.fromRGB(ambr, v, ambb); ambg=v; applyLightingSettings() end })
-titledRow(ambientSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=ambb, ValueChanged=function(s,v) Config.AmbientColor=Color3.fromRGB(ambr, ambg, v); ambb=v; applyLightingSettings() end })
+titledRow(ambientSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.AmbientColor.R*255), ValueChanged=function(s,v)
+    Config.AmbientColor = Color3.fromRGB(v, math.floor(Config.AmbientColor.G*255), math.floor(Config.AmbientColor.B*255))
+    applyLightingSettings()
+end })
+titledRow(ambientSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.AmbientColor.G*255), ValueChanged=function(s,v)
+    Config.AmbientColor = Color3.fromRGB(math.floor(Config.AmbientColor.R*255), v, math.floor(Config.AmbientColor.B*255))
+    applyLightingSettings()
+end })
+titledRow(ambientSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.AmbientColor.B*255), ValueChanged=function(s,v)
+    Config.AmbientColor = Color3.fromRGB(math.floor(Config.AmbientColor.R*255), math.floor(Config.AmbientColor.G*255), v)
+    applyLightingSettings()
+end })
 
 -- 4. FOV Circle Tab
 local fovTab = visualsSection:Tab({ Selected = false, Title = "FOV Circle", Icon = cascade.Symbols.sunMax })
@@ -1070,41 +1153,64 @@ titledRow(fovForm, "Thickness", ""):Right():Slider({ Minimum=1, Maximum=10, Valu
 titledRow(fovForm, "Sides", ""):Right():Slider({ Minimum=10, Maximum=100, Value=Config.FOVNumSides, ValueChanged=function(s,v) Config.FOVNumSides=v end })
 titledRow(fovForm, "Filled", ""):Right():Toggle({ Value=Config.FOVFilled, ValueChanged=function(s,v) Config.FOVFilled=v end })
 titledRow(fovForm, "Transparency", ""):Right():Slider({ Minimum=0, Maximum=1, Value=Config.FOVTransparency, ValueChanged=function(s,v) Config.FOVTransparency=v end })
+
 local fovColorSection = fovTab:PageSection({ Title = "FOV Color" }):Form()
-local fr,fg,fb = fovRGB()
-titledRow(fovColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=fr, ValueChanged=function(s,v) Config.FOVColor=Color3.fromRGB(v,fg,fb) end })
-titledRow(fovColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=fg, ValueChanged=function(s,v) Config.FOVColor=Color3.fromRGB(fr,v,fb) end })
-titledRow(fovColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=fb, ValueChanged=function(s,v) Config.FOVColor=Color3.fromRGB(fr,fg,v) end })
+titledRow(fovColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.FOVColor.R*255), ValueChanged=function(s,v)
+    Config.FOVColor = Color3.fromRGB(v, math.floor(Config.FOVColor.G*255), math.floor(Config.FOVColor.B*255))
+end })
+titledRow(fovColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.FOVColor.G*255), ValueChanged=function(s,v)
+    Config.FOVColor = Color3.fromRGB(math.floor(Config.FOVColor.R*255), v, math.floor(Config.FOVColor.B*255))
+end })
+titledRow(fovColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.FOVColor.B*255), ValueChanged=function(s,v)
+    Config.FOVColor = Color3.fromRGB(math.floor(Config.FOVColor.R*255), math.floor(Config.FOVColor.G*255), v)
+end })
 
 -- 5. Target Indicator Tab
 local indicatorTab = visualsSection:Tab({ Selected = false, Title = "Indicator", Icon = cascade.Symbols.sunMin })
 local indicatorForm = indicatorTab:Form()
 titledRow(indicatorForm, "Show Indicator", ""):Right():Toggle({ Value=Config.ShowTargetIndicator, ValueChanged=function(s,v) Config.ShowTargetIndicator=v end })
 titledRow(indicatorForm, "Box Size", ""):Right():Slider({ Minimum=5, Maximum=100, Value=Config.TargetIndicatorSize, ValueChanged=function(s,v) Config.TargetIndicatorSize=v end })
+
 local indColorSection = indicatorTab:PageSection({ Title = "Indicator Color" }):Form()
-local function indRGB() return Config.TargetIndicatorColor.R*255, Config.TargetIndicatorColor.G*255, Config.TargetIndicatorColor.B*255 end
-local ir,ig,ib = indRGB()
-titledRow(indColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=ir, ValueChanged=function(s,v) Config.TargetIndicatorColor=Color3.fromRGB(v,ig,ib) end })
-titledRow(indColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=ig, ValueChanged=function(s,v) Config.TargetIndicatorColor=Color3.fromRGB(ir,v,ib) end })
-titledRow(indColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=ib, ValueChanged=function(s,v) Config.TargetIndicatorColor=Color3.fromRGB(ir,ig,v) end })
+titledRow(indColorSection, "Red", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.TargetIndicatorColor.R*255), ValueChanged=function(s,v)
+    Config.TargetIndicatorColor = Color3.fromRGB(v, math.floor(Config.TargetIndicatorColor.G*255), math.floor(Config.TargetIndicatorColor.B*255))
+end })
+titledRow(indColorSection, "Green", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.TargetIndicatorColor.G*255), ValueChanged=function(s,v)
+    Config.TargetIndicatorColor = Color3.fromRGB(math.floor(Config.TargetIndicatorColor.R*255), v, math.floor(Config.TargetIndicatorColor.B*255))
+end })
+titledRow(indColorSection, "Blue", ""):Right():Slider({ Minimum=0, Maximum=255, Value=math.floor(Config.TargetIndicatorColor.B*255), ValueChanged=function(s,v)
+    Config.TargetIndicatorColor = Color3.fromRGB(math.floor(Config.TargetIndicatorColor.R*255), math.floor(Config.TargetIndicatorColor.G*255), v)
+end })
 
 -- Settings Section
 local settingsSection = window:Section({ Title = "Settings", Disclosure = false })
 local configTab = settingsSection:Tab({ Selected = false, Title = "Configuration", Icon = cascade.Symbols.gear })
-local appearanceForm = configTab:PageSection({ Title = "Appearance" }):Form()
-titledRow(appearanceForm, "Dark Theme", ""):Right():Toggle({ Value = app.Theme == cascade.Themes.Dark, ValueChanged = function(s,v) app.Theme = v and cascade.Themes.Dark or cascade.Themes.Light end })
-titledRow(appearanceForm, "Searchable", ""):Right():Toggle({ Value = window.Searching, ValueChanged = function(s,v) window.Searching = v end })
-titledRow(appearanceForm, "Draggable", ""):Right():Toggle({ Value = window.Draggable, ValueChanged = function(s,v) window.Draggable = v end })
-titledRow(appearanceForm, "Resizable", ""):Right():Toggle({ Value = window.Resizable, ValueChanged = function(s,v) window.Resizable = v end })
 
-local minimizeKeybind = Enum.KeyCode.RightControl
-UserInputService.InputEnded:Connect(function(input, gameProcessedEvent)
-    if input.KeyCode == minimizeKeybind and not gameProcessedEvent then
-        window.Minimized = not window.Minimized
+-- UI Styling / Theme & Accent Customization
+local appearanceForm = configTab:PageSection({ Title = "UI Style Customization" }):Form()
+titledRow(appearanceForm, "Dark Theme Mode", ""):Right():Toggle({ Value = app.Theme == cascade.Themes.Dark, ValueChanged = function(s,v) app.Theme = v and cascade.Themes.Dark or cascade.Themes.Light end })
+
+local accentNames = {"Blue", "Purple", "Pink", "Red", "Orange", "Yellow", "Green", "Graphite"}
+titledRow(appearanceForm, "UI Accent Color", ""):Right():PopUpButton({
+    Options = accentNames,
+    Value = 1,
+    ValueChanged = function(s, idx)
+        local accentKey = accentNames[idx]
+        if cascade.Accents[accentKey] then
+            app.Accent = cascade.Accents[accentKey]
+        end
     end
-end)
-local appControlForm = configTab:PageSection({ Title = "App Controls" }):Form()
-titledRow(appControlForm, "Minimize Keybind", ""):Right():KeybindField({ Value = minimizeKeybind, ValueChanged = function(s,v) minimizeKeybind = v end })
+})
+
+titledRow(appearanceForm, "Search Bar Enabled", ""):Right():Toggle({ Value = window.Searching, ValueChanged = function(s,v) window.Searching = v end })
+titledRow(appearanceForm, "Window Draggable", ""):Right():Toggle({ Value = window.Draggable, ValueChanged = function(s,v) window.Draggable = v end })
+titledRow(appearanceForm, "Window Resizable", ""):Right():Toggle({ Value = window.Resizable, ValueChanged = function(s,v) window.Resizable = v end })
+
+-- Control Hotkeys Customization Page
+local appControlForm = configTab:PageSection({ Title = "App & Combat Toggle Controls" }):Form()
+titledRow(appControlForm, "UI Open/Minimize Key", ""):Right():KeybindField({ Value = Config.UiToggleKey, ValueChanged = function(s,v) Config.UiToggleKey = v end })
+titledRow(appControlForm, "Aimbot Master Switch Hotkey", ""):Right():KeybindField({ Value = Config.AimbotToggleKey, ValueChanged = function(s,v) Config.AimbotToggleKey = v end })
+titledRow(appControlForm, "Silent Aim Master Switch Hotkey", ""):Right():KeybindField({ Value = Config.SilentAimToggleKey, ValueChanged = function(s,v) Config.SilentAimToggleKey = v end })
 
 -- Initialize
 updateFOV()
