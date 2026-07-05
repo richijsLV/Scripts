@@ -184,12 +184,13 @@ local Config = {
     ExposureCompensation = 0.0,
 }
 
--- Global Scope Targeting State (Ensures thread synchronization) [1]
+-- Global Scope State Instantiation (Completely protected against nil-subtraction errors)
 local cachedClosestPart = nil
 local lastTarget = nil
 local lockStartTime = 0
 local reactionTargetTime = 0
 local autoShootNext = 0
+local lastFpsTime = tick()
 
 -- Safe Drawing Constructor (Prevents script halt if Drawing API is unsupported)
 local function safeCreateDrawing(class, props)
@@ -249,6 +250,7 @@ local Mouse = LocalPlayer:GetMouse()
 
 -- Shortcuts
 local getPlayers = Players.GetPlayers
+local findFirstChild = game.FindFirstChild
 local getMouseLocation = UserInputService.GetMouseLocation
 
 -- Helper notifications
@@ -453,7 +455,7 @@ local function getPositionOnScreen(position)
     return Vector2.new(vec3.X, vec3.Y), onScreen
 end
 
--- Clean Visibility Check (Uses standard Raycasting to prevent legacies failures)
+-- Visibility check logic (Modern Raycasting to bypass CAM errors)
 local function isPlayerVisible(player)
     local char = player.Character
     local localChar = LocalPlayer.Character
@@ -485,7 +487,7 @@ local function getClosestPlayer()
     local closestDist = math.huge
     for _, player in ipairs(getPlayers(Players)) do
         if player == LocalPlayer then continue end
-        if Config.TeamCheck and player.Team == LocalPlayer.Team then continue end
+        if Config.TeamCheck and player.Team ~= nil and player.Team == LocalPlayer.Team then continue end
         local char = player.Character
         if not char then continue end
         local humanoid = char:FindFirstChildOfClass("Humanoid")
@@ -903,7 +905,385 @@ task.spawn(function()
     end
 end)
 
--- Autoshoot logic
+-- Adaptive Live Profile (Copied)
+local Profile = { AverageSpeed = 0, JitterScale = 0 }
+local naturalMovementData = {}
+local lastMousePos = getMouseLocation(UserInputService)
+
+task.spawn(function()
+    while true do
+        task.wait(1 / 144)
+        local holding = true
+        if Config.HoldToAim then
+            if Config.AimMouseButton == "MouseButton1" then
+                holding = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+            elseif Config.AimMouseButton == "MouseButton2" then
+                holding = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            elseif Config.AimMouseButton == "Keyboard" then
+                holding = UserInputService:IsKeyDown(Config.AimKeyboardKey)
+            end
+        end
+        if not Config.AimbotEnabled or not holding then
+            local currentMousePos = getMouseLocation(UserInputService)
+            local delta = (currentMousePos - lastMousePos)
+            if delta.Magnitude > 0.1 then
+                table.insert(naturalMovementData, { delta = delta, speed = delta.Magnitude, time = tick() })
+                if #naturalMovementData > 144 then table.remove(naturalMovementData, 1) end
+                local speedSum, jitterSum = 0, 0
+                for i = 2, #naturalMovementData do
+                    speedSum = speedSum + naturalMovementData[i].speed
+                    local v1 = naturalMovementData[i-1].delta
+                    local v2 = naturalMovementData[i].delta
+                    if v1.Magnitude > 0 and v2.Magnitude > 0 then
+                        local dot = v1:Dot(v2) / (v1.Magnitude * v2.Magnitude)
+                        local angle = math.acos(math.clamp(dot, -1, 1))
+                        jitterSum = jitterSum + angle
+                    end
+                end
+                local count = #naturalMovementData
+                if count > 1 then
+                    Profile.AverageSpeed = speedSum / count
+                    Profile.JitterScale = jitterSum / count
+                end
+            end
+            lastMousePos = currentMousePos
+        end
+    end
+end)
+
+-- FOV Changer
+local fovConnection
+local function updateFOV()
+    if fovConnection then fovConnection:Disconnect() end
+    if Config.CustomFOVEnabled then
+        fovConnection = RunService.RenderStepped:Connect(function()
+            if Camera then Camera.FieldOfView = Config.CustomFOV end
+        end)
+    else
+        if Camera then Camera.FieldOfView = 70 end
+    end
+end
+
+-- Anti-Aim Loop
+local antiAimConnection
+local function updateAntiAim()
+    if antiAimConnection then antiAimConnection:Disconnect() end
+    if Config.AntiAimEnabled then
+        antiAimConnection = RunService.Heartbeat:Connect(function()
+            local char = LocalPlayer.Character
+            if not char then return end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+            
+            local rotX = 0
+            local rotY = 0
+            
+            if Config.AntiAimMode == "Spin" then
+                rotY = (tick() * Config.AntiAimSpeed * 10) % 360
+            elseif Config.AntiAimMode == "Jitter" then
+                rotY = math.sin(tick() * Config.AntiAimSpeed) * Config.AntiAimJitterAmplitude
+            elseif Config.AntiAimMode == "Side Jitter" then
+                rotY = (math.sin(tick() * Config.AntiAimSpeed) > 0 and 1 or -1) * Config.AntiAimJitterAmplitude
+            elseif Config.AntiAimMode == "Backward" then
+                rotY = 180
+            elseif Config.AntiAimMode == "Up-Down" then
+                rotX = (tick() * 50 % 2 == 0) and 75 or -75
+            elseif Config.AntiAimMode == "Custom Yaw" then
+                rotY = Config.AntiAimYawOffset
+            elseif Config.AntiAimMode == "Lurch" then
+                rotY = math.random(-180, 180)
+            end
+            root.CFrame = root.CFrame * CFrame.Angles(math.rad(rotX), math.rad(rotY), 0)
+        end)
+    end
+end
+
+-- isAimingHeld
+local function isAimingHeld()
+    if not Config.HoldToAim then return true end
+    if Config.AimMouseButton == "MouseButton1" then
+        return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+    elseif Config.AimMouseButton == "MouseButton2" then
+        return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+    elseif Config.AimMouseButton == "Keyboard" then
+        return UserInputService:IsKeyDown(Config.AimKeyboardKey)
+    end
+    return true
+end
+
+-- Render Loop Updates & FPS Calculations (Restored precise Cascade tracking mathematics)
+RunService.RenderStepped:Connect(function()
+    cachedClosestPart = getClosestPlayer()
+    updateEsp()
+    applyLightingSettings()
+    
+    -- Delta Time Frame Metering (Protected arithmetic fallback)
+    local now = tick()
+    local dt = now - (lastFpsTime or now)
+    lastFpsTime = now
+    local fps = dt > 0 and math.floor(1 / dt) or 0
+    local ping = math.floor(statsInstance.Network.ServerStatsItem["Data Ping"]:GetValue())
+    local mem = math.floor(gcinfo())
+
+    -- Watermark & Performance Rendering
+    if Config.WatermarkEnabled and watermarkText and watermarkBg then
+        watermarkText.Text = " " .. Config.WatermarkText .. " | Live "
+        watermarkText.Position = Vector2.new(15, 20)
+        watermarkText.Visible = true
+        watermarkBg.Position = Vector2.new(10, 15)
+        watermarkBg.Size = Vector2.new(watermarkText.TextBounds.X + 10, watermarkText.TextBounds.Y + 10)
+        watermarkBg.Visible = true
+    else
+        if watermarkText then watermarkText.Visible = false end
+        if watermarkBg then watermarkBg.Visible = false end
+    end
+
+    if Config.PerfMonitorEnabled and perfText and perfBg then
+        perfText.Text = string.format(" FPS: %d | Ping: %dms | Mem: %dMB", fps, ping, mem)
+        perfText.Position = Vector2.new(15, 60)
+        perfText.Visible = true
+        perfBg.Position = Vector2.new(10, 55)
+        perfBg.Size = Vector2.new(perfText.TextBounds.X + 10, perfText.TextBounds.Y + 10)
+        perfBg.Visible = true
+    else
+        if perfText then perfText.Visible = false end
+        if perfBg then perfBg.Visible = false end
+    end
+
+    -- Hitmarker crosshair lines updater
+    if Config.HitMarkers and tick() < hitmarkerTime then
+        local center = getMouseLocation(UserInputService)
+        local gap = 4
+        local len = 8
+        
+        if hitmarkerLines[1] then
+            hitmarkerLines[1].From = center - Vector2.new(gap, gap)
+            hitmarkerLines[1].To = center - Vector2.new(gap + len, gap + len)
+            hitmarkerLines[1].Visible = true
+        end
+        
+        if hitmarkerLines[2] then
+            hitmarkerLines[2].From = center + Vector2.new(gap, -gap)
+            hitmarkerLines[2].To = center + Vector2.new(gap + len, -(gap + len))
+            hitmarkerLines[2].Visible = true
+        end
+        
+        if hitmarkerLines[3] then
+            hitmarkerLines[3].From = center + Vector2.new(-gap, gap)
+            hitmarkerLines[3].To = center + Vector2.new(-(gap + len), gap + len)
+            hitmarkerLines[3].Visible = true
+        end
+        
+        if hitmarkerLines[4] then
+            hitmarkerLines[4].From = center + Vector2.new(gap, gap)
+            hitmarkerLines[4].To = center + Vector2.new(gap + len, gap + len)
+            hitmarkerLines[4].Visible = true
+        end
+    else
+        for _, l in ipairs(hitmarkerLines) do l.Visible = false end
+    end
+
+    -- Floating damage indicators
+    for i = #damageIndicators, 1, -1 do
+        local indicator = damageIndicators[i]
+        indicator.Life = (indicator.Life or 1.0) - 0.02
+        if indicator.Life <= 0 then
+            indicator.Drawing:Remove()
+            table.remove(damageIndicators, i)
+        else
+            local screenPos, onScreen = getPositionOnScreen(indicator.WorldPos)
+            if onScreen then
+                indicator.Drawing.Visible = true
+                indicator.Drawing.Position = screenPos - Vector2.new(0, (1 - (indicator.Life or 1.0)) * 50)
+                indicator.Drawing.Transparency = indicator.Life
+            else
+                indicator.Drawing.Visible = false
+            end
+        end
+    end
+
+    -- Bunny Hop Space bar input
+    if Config.BhopEnabled and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.FloorMaterial ~= Enum.Material.Air then
+            hum.Jump = true
+        end
+    end
+
+    -- Silent walk physics slow speed
+    if Config.SilentWalkEnabled and silentWalkActive then
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.WalkSpeed = Config.SilentWalkSpeed
+        end
+    end
+
+    -- Fake Lag spikes
+    if Config.FakeLagEnabled then
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if root and math.random(1, 100) <= Config.FakeLagInterval then
+            root.Anchored = true
+            task.wait(Config.FakeLagDuration / 1000)
+            root.Anchored = false
+        end
+    end
+
+    -- Aimbot Core Engine (Restored exact mathematical equations from reference Cascade script with robust nil fallbacks)
+    if Config.AimbotEnabled and cachedClosestPart and isAimingHeld() and Camera then
+        if cachedClosestPart ~= lastTarget then
+            lastTarget = cachedClosestPart
+            lockStartTime = tick()
+        end
+        local timeElapsed = tick() - (lockStartTime or tick())
+        local targetPos = cachedClosestPart.Position
+        if Config.Prediction and cachedClosestPart.Velocity then
+            targetPos = targetPos + cachedClosestPart.Velocity * Config.PredictionAmount
+        end
+        local currentCFrame = Camera.CFrame
+
+        -- Humanization parameters
+        local smooth, curve, shake, overshoot, undershoot, flick =
+            Config.Smoothing, Config.AccelerationCurve, Config.AimShake, Config.Overshoot, Config.Undershoot, Config.FlickTrackingBias
+        if Config.HumanizationMode == "Copied" then
+            shake = Profile.JitterScale * 8.5
+            smooth = math.clamp(Config.Smoothing * (1 / math.max(Profile.AverageSpeed / 10, 0.5)), 1, 100)
+            overshoot, undershoot, curve, flick = 0, 0, 1.0, 0.5
+        end
+
+        -- Apply jitter
+        if Config.HumanizationMode ~= "Custom" or Config.AimShake > 0 then
+            local jitterScale = (Config.HumanizationMode == "Copied") and shake or Config.AimShake * 0.08
+            targetPos = targetPos + Vector3.new(
+                (math.random() - 0.5) * jitterScale,
+                (math.random() - 0.5) * jitterScale,
+                (math.random() - 0.5) * jitterScale
+            )
+        end
+
+        -- Safe mouse emulation bypass option
+        if Config.MouseEventEmulation and mousemoverel then
+            local screenPos, onScreen = getPositionOnScreen(targetPos)
+            if onScreen then
+                local mousePos = getMouseLocation(UserInputService)
+                local delta = (screenPos - mousePos) / smooth
+                mousemoverel(delta.X, delta.Y)
+            end
+        else
+            local rawTargetCFrame = CFrame.new(currentCFrame.Position, targetPos)
+
+            if overshoot > 0 and timeElapsed < 0.25 then
+                local angleFactor = 1 + (overshoot / 100) * math.exp(-timeElapsed * 10)
+                local rawAngles = {rawTargetCFrame:ToEulerAnglesYXZ()}
+                local curAngles = {currentCFrame:ToEulerAnglesYXZ()}
+                rawTargetCFrame = CFrame.fromEulerAnglesYXZ(
+                    curAngles[1] + (rawAngles[1] - curAngles[1]) * angleFactor,
+                    curAngles[2] + (rawAngles[2] - curAngles[2]) * angleFactor,
+                    0
+                )
+            end
+
+            local smoothingMultiplier = 1
+            if undershoot > 0 and timeElapsed > 0.1 then
+                smoothingMultiplier = 1 + (undershoot / 50)
+            end
+
+            local baseSmooth = math.clamp(smooth * smoothingMultiplier, 1, 100)
+            
+            -- Dynamic Smoothing calculations
+            if Config.DynamicSmoothing then
+                baseSmooth = baseSmooth + (math.sin(tick() * 5) * (baseSmooth * 0.25))
+            end
+
+            local step = 1 / baseSmooth
+            step = math.pow(step, curve)
+
+            if flick > 0.5 then
+                if timeElapsed < 0.15 then step = math.clamp(step * (flick * 2), 0, 1) end
+            else
+                if timeElapsed < 0.2 then step = step * (flick + 0.5) end
+            end
+
+            -- Optional Bezier Path interpolator
+            if Config.BezierPathing then
+                local p0 = currentCFrame.Position
+                local p3 = targetPos
+                local diff = (p3 - p0)
+                local p1 = p0 + currentCFrame.LookVector * (diff.Magnitude * 0.33)
+                local p2 = p3 - rawTargetCFrame.LookVector * (diff.Magnitude * 0.33)
+                local bezierT = math.clamp(timeElapsed / (smooth * 0.1), 0, 1)
+                local currentPos = getBezierPoint(p0, p1, p2, p3, bezierT)
+                Camera.CFrame = CFrame.new(currentCFrame.Position, currentPos)
+            else
+                Camera.CFrame = currentCFrame:Lerp(rawTargetCFrame, math.clamp(step, 0, 1))
+            end
+        end
+    else
+        lastTarget = nil
+    end
+
+    -- FOV circle drawing anims
+    if Config.FOVEnabled and fovCircle then
+        local radius = Config.FOVRadius
+        if Config.FovAnimated then
+            radius = radius + math.sin(tick() * Config.FovAnimationSpeed) * Config.FovAnimationAmplitude
+        end
+        fovCircle.Visible = true
+        fovCircle.Radius = radius
+        fovCircle.Color = Config.FOVColor
+        fovCircle.Position = getMouseLocation(UserInputService)
+        fovCircle.Thickness = Config.FOVThickness
+        fovCircle.NumSides = Config.FOVNumSides
+        fovCircle.Filled = Config.FOVFilled
+        fovCircle.Transparency = Config.FOVTransparency
+    else
+        if fovCircle then fovCircle.Visible = false end
+    end
+
+    -- Target indicator [2]
+    if Config.ShowTargetIndicator and cachedClosestPart and targetBox then
+        local pos, onScreen = getPositionOnScreen(cachedClosestPart.Position)
+        if onScreen then
+            targetBox.Visible = true
+            targetBox.Position = pos - Vector2.new(Config.TargetIndicatorSize / 2, Config.TargetIndicatorSize / 2)
+            targetBox.Color = Config.TargetIndicatorColor
+            targetBox.Size = Vector2.new(Config.TargetIndicatorSize, Config.TargetIndicatorSize)
+            targetBox.Thickness = Config.TargetIndicatorThickness or 2
+            targetBox.Filled = Config.TargetIndicatorFilled or false
+            targetBox.Transparency = Config.TargetIndicatorTransparency or 1.0
+        else
+            targetBox.Visible = false
+        end
+    else
+        if targetBox then targetBox.Visible = false end
+    end
+
+    -- Silent Aim target visualizer
+    if Config.SilentVisualizerEnabled and Config.SilentAimEnabled and cachedClosestPart and silentVisualizer then
+        local targetPos = cachedClosestPart.Position
+        if Config.Prediction and cachedClosestPart.Velocity then
+            targetPos = targetPos + cachedClosestPart.Velocity * Config.PredictionAmount
+        end
+        local pos, onScreen = getPositionOnScreen(targetPos)
+        if onScreen then
+            silentVisualizer.Visible = true
+            silentVisualizer.Position = pos
+            silentVisualizer.Radius = Config.SilentVisualizerRadius
+            silentVisualizer.Color = Config.SilentVisualizerColor
+            silentVisualizer.Transparency = Config.SilentVisualizerTransparency
+        else
+            silentVisualizer.Visible = false
+        end
+    else
+        if silentVisualizer then silentVisualizer.Visible = false end
+    end
+
+    updateRadar()
+end)
+
+-- Autoshoot logic (Restored fully synced outermost variable dependencies)
 task.spawn(function()
     while true do
         task.wait()
@@ -922,7 +1302,7 @@ task.spawn(function()
     end
 end)
 
--- Triggerbot
+-- Triggerbot (Restored fully synced outermost variable dependencies)
 task.spawn(function()
     while true do
         task.wait(1/60)
@@ -944,55 +1324,6 @@ task.spawn(function()
                 clickMouse()
             end
         end
-    end
-end)
-
--- Anti-AFK Setup
-local IDLE_KICK_MUTEX = false
-LocalPlayer.Idled:Connect(function()
-    if Config.AntiAfkEnabled and not IDLE_KICK_MUTEX then
-        IDLE_KICK_MUTEX = true
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-        task.wait(0.1)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-        IDLE_KICK_MUTEX = false
-    end
-end)
-
--- Ledge jump check
-task.spawn(function()
-    while true do
-        task.wait(0.05)
-        if Config.EdgeJumpEnabled then
-            local char = LocalPlayer.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if root and hum and hum.FloorMaterial ~= Enum.Material.Air then
-                local velocity = root.Velocity
-                if velocity.Magnitude > 2 then
-                    local dir = velocity.Unit * 1.5
-                    local checkOrigin = root.Position + dir - Vector3.new(0, 2.5, 0)
-                    local rayResult = workspace:Raycast(checkOrigin, Vector3.new(0, -5, 0))
-                    if not rayResult then
-                        hum.Jump = true
-                    end
-                end
-            end
-        end
-    end
-end)
-
--- Silent walk Input logic
-local silentWalkActive = false
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-    if input.KeyCode == Config.SilentWalkKey then
-        silentWalkActive = true
-    end
-end)
-UserInputService.InputEnded:Connect(function(input)
-    if input.KeyCode == Config.SilentWalkKey then
-        silentWalkActive = false
     end
 end)
 
@@ -1108,278 +1439,6 @@ oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, index)
     end
     return oldIndex(self, index)
 end))
-
--- Dynamic Rendering & Humanized Core Lerping Loops
-RunService.RenderStepped:Connect(function()
-    cachedClosestPart = getClosestPlayer()
-    updateEsp()
-    applyLightingSettings()
-    
-    -- Delta Time Frame Metering (Non-blocking calculation)
-    local now = tick()
-    local dt = now - lastFpsTime
-    lastFpsTime = now
-    local fps = dt > 0 and math.floor(1 / dt) or 0
-    local ping = math.floor(statsInstance.Network.ServerStatsItem["Data Ping"]:GetValue())
-    local mem = math.floor(gcinfo())
-
-    -- Watermark & Performance Rendering
-    if Config.WatermarkEnabled and watermarkText and watermarkBg then
-        watermarkText.Text = " " .. Config.WatermarkText .. " | Live "
-        watermarkText.Position = Vector2.new(15, 20)
-        watermarkText.Visible = true
-        watermarkBg.Position = Vector2.new(10, 15)
-        watermarkBg.Size = Vector2.new(watermarkText.TextBounds.X + 10, watermarkText.TextBounds.Y + 10)
-        watermarkBg.Visible = true
-    else
-        if watermarkText then watermarkText.Visible = false end
-        if watermarkBg then watermarkBg.Visible = false end
-    end
-
-    if Config.PerfMonitorEnabled and perfText and perfBg then
-        perfText.Text = string.format(" FPS: %d | Ping: %dms | Mem: %dMB", fps, ping, mem)
-        perfText.Position = Vector2.new(15, 60)
-        perfText.Visible = true
-        perfBg.Position = Vector2.new(10, 55)
-        perfBg.Size = Vector2.new(perfText.TextBounds.X + 10, perfText.TextBounds.Y + 10)
-        perfBg.Visible = true
-    else
-        if perfText then perfText.Visible = false end
-        if perfBg then perfBg.Visible = false end
-    end
-
-    -- Hitmarker crosshair lines updater
-    if Config.HitMarkers and tick() < hitmarkerTime then
-        local center = getMouseLocation(UserInputService)
-        local gap = 4
-        local len = 8
-        
-        if hitmarkerLines[1] then
-            hitmarkerLines[1].From = center - Vector2.new(gap, gap)
-            hitmarkerLines[1].To = center - Vector2.new(gap + len, gap + len)
-            hitmarkerLines[1].Visible = true
-        end
-        
-        if hitmarkerLines[2] then
-            hitmarkerLines[2].From = center + Vector2.new(gap, -gap)
-            hitmarkerLines[2].To = center + Vector2.new(gap + len, -(gap + len))
-            hitmarkerLines[2].Visible = true
-        end
-        
-        if hitmarkerLines[3] then
-            hitmarkerLines[3].From = center + Vector2.new(-gap, gap)
-            hitmarkerLines[3].To = center + Vector2.new(-(gap + len), gap + len)
-            hitmarkerLines[3].Visible = true
-        end
-        
-        if hitmarkerLines[4] then
-            hitmarkerLines[4].From = center + Vector2.new(gap, gap)
-            hitmarkerLines[4].To = center + Vector2.new(gap + len, gap + len)
-            hitmarkerLines[4].Visible = true
-        end
-    else
-        for _, l in ipairs(hitmarkerLines) do l.Visible = false end
-    end
-
-    -- Floating damage indicators
-    for i = #damageIndicators, 1, -1 do
-        local indicator = damageIndicators[i]
-        indicator.Life = indicator.Life - 0.02
-        if indicator.Life <= 0 then
-            indicator.Drawing:Remove()
-            table.remove(damageIndicators, i)
-        else
-            local screenPos, onScreen = getPositionOnScreen(indicator.WorldPos)
-            if onScreen then
-                indicator.Drawing.Visible = true
-                indicator.Drawing.Position = screenPos - Vector2.new(0, (1 - indicator.Life) * 50)
-                indicator.Drawing.Transparency = indicator.Life
-            else
-                indicator.Drawing.Visible = false
-            end
-        end
-    end
-
-    -- Bunny Hop Space bar input
-    if Config.BhopEnabled and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum and hum.FloorMaterial ~= Enum.Material.Air then
-            hum.Jump = true
-        end
-    end
-
-    -- Silent walk physics slow speed
-    if Config.SilentWalkEnabled and silentWalkActive then
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.WalkSpeed = Config.SilentWalkSpeed
-        end
-    end
-
-    -- Fake Lag spikes
-    if Config.FakeLagEnabled then
-        local char = LocalPlayer.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        if root and math.random(1, 100) <= Config.FakeLagInterval then
-            root.Anchored = true
-            task.wait(Config.FakeLagDuration / 1000)
-            root.Anchored = false
-        end
-    end
-
-    -- Aimbot Core Engine (Restored exact mathematical equations from reference Cascade script)
-    if Config.AimbotEnabled and cachedClosestPart and isAimingHeld() and Camera then
-        if cachedClosestPart ~= lastTarget then
-            lastTarget = cachedClosestPart
-            lockStartTime = tick()
-        end
-        local timeElapsed = tick() - lockStartTime
-        local targetPos = cachedClosestPart.Position
-        if Config.Prediction and cachedClosestPart.Velocity then
-            targetPos = targetPos + cachedClosestPart.Velocity * Config.PredictionAmount
-        end
-        local currentCFrame = Camera.CFrame
-
-        -- Humanization parameters
-        local smooth, curve, shake, overshoot, undershoot, flick =
-            Config.Smoothing, Config.AccelerationCurve, Config.AimShake, Config.Overshoot, Config.Undershoot, Config.FlickTrackingBias
-        if Config.HumanizationMode == "Copied" then
-            shake = Profile.JitterScale * 8.5
-            smooth = math.clamp(Config.Smoothing * (1 / math.max(Profile.AverageSpeed / 10, 0.5)), 1, 100)
-            overshoot, undershoot, curve, flick = 0, 0, 1.0, 0.5
-        end
-
-        -- Apply jitter
-        if Config.HumanizationMode ~= "Custom" or Config.AimShake > 0 then
-            local jitterScale = (Config.HumanizationMode == "Copied") and shake or Config.AimShake * 0.08
-            targetPos = targetPos + Vector3.new(
-                (math.random() - 0.5) * jitterScale,
-                (math.random() - 0.5) * jitterScale,
-                (math.random() - 0.5) * jitterScale
-            )
-        end
-
-        -- Safe mouse emulation bypass option
-        if Config.MouseEventEmulation and mousemoverel then
-            local screenPos, onScreen = getPositionOnScreen(targetPos)
-            if onScreen then
-                local mousePos = getMouseLocation(UserInputService)
-                local delta = (screenPos - mousePos) / smooth
-                mousemoverel(delta.X, delta.Y)
-            end
-        else
-            local rawTargetCFrame = CFrame.new(currentCFrame.Position, targetPos)
-
-            if overshoot > 0 and timeElapsed < 0.25 then
-                local angleFactor = 1 + (overshoot / 100) * math.exp(-timeElapsed * 10)
-                local rawAngles = {rawTargetCFrame:ToEulerAnglesYXZ()}
-                local curAngles = {currentCFrame:ToEulerAnglesYXZ()}
-                rawTargetCFrame = CFrame.fromEulerAnglesYXZ(
-                    curAngles[1] + (rawAngles[1] - curAngles[1]) * angleFactor,
-                    curAngles[2] + (rawAngles[2] - curAngles[2]) * angleFactor,
-                    0
-                )
-            end
-
-            local smoothingMultiplier = 1
-            if undershoot > 0 and timeElapsed > 0.1 then
-                smoothingMultiplier = 1 + (undershoot / 50)
-            end
-
-            local baseSmooth = math.clamp(smooth * smoothingMultiplier, 1, 100)
-            
-            -- Dynamic Smoothing calculations
-            if Config.DynamicSmoothing then
-                baseSmooth = baseSmooth + (math.sin(tick() * 5) * (baseSmooth * 0.25))
-            end
-
-            local step = 1 / baseSmooth
-            step = math.pow(step, curve)
-
-            if flick > 0.5 then
-                if timeElapsed < 0.15 then step = math.clamp(step * (flick * 2), 0, 1) end
-            else
-                if timeElapsed < 0.2 then step = step * (flick + 0.5) end
-            end
-
-            -- Optional Bezier Path interpolator
-            if Config.BezierPathing then
-                local p0 = currentCFrame.Position
-                local p3 = targetPos
-                local diff = (p3 - p0)
-                local p1 = p0 + currentCFrame.LookVector * (diff.Magnitude * 0.33)
-                local p2 = p3 - rawTargetCFrame.LookVector * (diff.Magnitude * 0.33)
-                local bezierT = math.clamp(timeElapsed / (smooth * 0.1), 0, 1)
-                local currentPos = getBezierPoint(p0, p1, p2, p3, bezierT)
-                Camera.CFrame = CFrame.new(currentCFrame.Position, currentPos)
-            else
-                Camera.CFrame = currentCFrame:Lerp(rawTargetCFrame, math.clamp(step, 0, 1))
-            end
-        end
-    else
-        lastTarget = nil
-    end
-
-    -- FOV circle drawing anims
-    if Config.FOVEnabled and fovCircle then
-        local radius = Config.FOVRadius
-        if Config.FovAnimated then
-            radius = radius + math.sin(tick() * Config.FovAnimationSpeed) * Config.FovAnimationAmplitude
-        end
-        fovCircle.Visible = true
-        fovCircle.Radius = radius
-        fovCircle.Color = Config.FOVColor
-        fovCircle.Position = getMouseLocation(UserInputService)
-        fovCircle.Thickness = Config.FOVThickness
-        fovCircle.NumSides = Config.FOVNumSides
-        fovCircle.Filled = Config.FOVFilled
-        fovCircle.Transparency = Config.FOVTransparency
-    else
-        if fovCircle then fovCircle.Visible = false end
-    end
-
-    -- Target indicator [2]
-    if Config.ShowTargetIndicator and cachedClosestPart and targetBox then
-        local pos, onScreen = getPositionOnScreen(cachedClosestPart.Position)
-        if onScreen then
-            targetBox.Visible = true
-            targetBox.Position = pos - Vector2.new(Config.TargetIndicatorSize / 2, Config.TargetIndicatorSize / 2)
-            targetBox.Color = Config.TargetIndicatorColor
-            targetBox.Size = Vector2.new(Config.TargetIndicatorSize, Config.TargetIndicatorSize)
-            targetBox.Thickness = Config.TargetIndicatorThickness
-            targetBox.Filled = Config.TargetIndicatorFilled
-            targetBox.Transparency = Config.TargetIndicatorTransparency
-        else
-            targetBox.Visible = false
-        end
-    else
-        if targetBox then targetBox.Visible = false end
-    end
-
-    -- Silent Aim target visualizer
-    if Config.SilentVisualizerEnabled and Config.SilentAimEnabled and cachedClosestPart and silentVisualizer then
-        local targetPos = cachedClosestPart.Position
-        if Config.Prediction and cachedClosestPart.Velocity then
-            targetPos = targetPos + cachedClosestPart.Velocity * Config.PredictionAmount
-        end
-        local pos, onScreen = getPositionOnScreen(targetPos)
-        if onScreen then
-            silentVisualizer.Visible = true
-            silentVisualizer.Position = pos
-            silentVisualizer.Radius = Config.SilentVisualizerRadius
-            silentVisualizer.Color = Config.SilentVisualizerColor
-            silentVisualizer.Transparency = Config.SilentVisualizerTransparency
-        else
-            silentVisualizer.Visible = false
-        end
-    else
-        if silentVisualizer then silentVisualizer.Visible = false end
-    end
-
-    updateRadar()
-end)
 
 -- Safe UI API Wrappers to dynamically adjust across Syde updates & Warn UI Errors
 local function addToggle(tab, title, description, defaultValue, flag, callback)
