@@ -14,7 +14,7 @@ for _, child in ipairs(coregui:GetChildren()) do
     end
 end
 
--- Load Syde
+-- Load Syde UI Framework
 local syde = loadstring(game:HttpGet("https://raw.githubusercontent.com/essencejs/syde/refs/heads/main/source", true))()
 
 -- Monkeypatch Modal to suppress internal library Frame errors
@@ -30,20 +30,21 @@ syde.Modal = function(self, options)
     end
 end
 
--- Isolated Configuration Setup (Prevents loading incompatible settings from other scripts)
+-- Configuration Setup
 syde:Load({
-    Name = "Adaptive Aimbot",
+    Name = "Adaptive UI",
     Status = "Stable",
     Accent = Color3.fromRGB(54, 57, 241),
     HitBox = Color3.fromRGB(54, 57, 241),
-    AutoLoad = false, -- Disabled to avoid loading corrupted Autofarm settings
+    AutoLoad = false,
     ConfigurationSaving = {
         Enabled = true,
-        FolderName = "AdaptiveAimbot_FreshV5", -- Unique folder
-        FileName = "aimbot_settings"
+        FolderName = "AdaptiveUI_Fresh",
+        FileName = "settings"
     }
 })
 
+-- Global State & Options
 local Config = {
     -- Master switches
     AimbotEnabled = false,
@@ -205,55 +206,38 @@ local Config = {
     CloudConfigCode = "",
 }
 
--- Performance Indicators
-local statsInstance = game:GetService("Stats")
+-- Safe Drawing Constructor (Prevents script halt if Drawing API is unsupported)
+local function safeCreateDrawing(class, props)
+    if not Drawing or not Drawing.new then return nil end
+    local d
+    local success = pcall(function()
+        d = Drawing.new(class)
+        if props then
+            for k, v in pairs(props) do
+                d[k] = v
+            end
+        end
+    end)
+    return success and d or nil
+end
 
--- Custom Screen Drawing Instances
-local fovCircle = Drawing.new("Circle")
-local targetBox = Drawing.new("Square")
-local silentVisualizer = Drawing.new("Circle")
+-- Screen Drawing Instances
+local fovCircle = safeCreateDrawing("Circle")
+local targetBox = safeCreateDrawing("Square")
+local silentVisualizer = safeCreateDrawing("Circle")
 
-local watermarkText = Drawing.new("Text")
-watermarkText.Size = 16
-watermarkText.Color = Color3.fromRGB(255, 255, 255)
-watermarkText.Outline = true
-watermarkText.Center = false
+local watermarkText = safeCreateDrawing("Text", { Size = 16, Color = Color3.fromRGB(255, 255, 255), Outline = true, Center = false })
+local watermarkBg = safeCreateDrawing("Square", { Color = Color3.fromRGB(15, 15, 15), Thickness = 1, Filled = true, Transparency = 0.6 })
 
-local watermarkBg = Drawing.new("Square")
-watermarkBg.Color = Color3.fromRGB(15, 15, 15)
-watermarkBg.Thickness = 1
-watermarkBg.Filled = true
-watermarkBg.Transparency = 0.6
+local perfText = safeCreateDrawing("Text", { Size = 16, Color = Color3.fromRGB(255, 255, 255), Outline = true, Center = false })
+local perfBg = safeCreateDrawing("Square", { Color = Color3.fromRGB(15, 15, 15), Thickness = 1, Filled = true, Transparency = 0.6 })
 
-local perfText = Drawing.new("Text")
-perfText.Size = 16
-perfText.Color = Color3.fromRGB(255, 255, 255)
-perfText.Outline = true
-perfText.Center = false
-
-local perfBg = Drawing.new("Square")
-perfBg.Color = Color3.fromRGB(15, 15, 15)
-perfBg.Thickness = 1
-perfBg.Filled = true
-perfBg.Transparency = 0.6
-
-local radarOuter = Drawing.new("Circle")
-radarOuter.Radius = Config.RadarSize
-radarOuter.Thickness = 2
-radarOuter.Color = Color3.fromRGB(50, 250, 50)
-radarOuter.Filled = false
-
-local radarCenter = Drawing.new("Circle")
-radarCenter.Radius = 3
-radarCenter.Thickness = 1
-radarCenter.Color = Color3.fromRGB(250, 50, 50)
-radarCenter.Filled = true
-
-local radarHeading = Drawing.new("Line")
-radarHeading.Thickness = 1.5
-radarHeading.Color = Color3.fromRGB(50, 250, 50)
+local radarOuter = safeCreateDrawing("Circle", { Radius = Config.RadarSize, Thickness = 2, Color = Color3.fromRGB(50, 250, 50), Filled = false })
+local radarCenter = safeCreateDrawing("Circle", { Radius = 3, Thickness = 1, Color = Color3.fromRGB(250, 50, 50), Filled = true })
+local radarHeading = safeCreateDrawing("Line", { Thickness = 1.5, Color = Color3.fromRGB(50, 250, 50) })
 
 local radarDots = {}
+local statsInstance = game:GetService("Stats")
 
 -- Original lighting backup
 local originalLighting = {
@@ -385,7 +369,8 @@ end
 local damageIndicators = {}
 local function spawnDamageIndicator(position, damage)
     if not Config.DamageIndicators then return end
-    local d = Drawing.new("Text")
+    local d = safeCreateDrawing("Text")
+    if not d then return end
     d.Visible = true
     d.Text = "-" .. tostring(math.floor(damage))
     d.Size = 18
@@ -414,11 +399,13 @@ end
 -- Hitmarker Crosshair Flash Lines
 local hitmarkerLines = {}
 for i = 1, 4 do
-    local l = Drawing.new("Line")
-    l.Visible = false
-    l.Color = Color3.fromRGB(255, 255, 255)
-    l.Thickness = 1.5
-    table.insert(hitmarkerLines, l)
+    local l = safeCreateDrawing("Line")
+    if l then
+        l.Visible = false
+        l.Color = Color3.fromRGB(255, 255, 255)
+        l.Thickness = 1.5
+        table.insert(hitmarkerLines, l)
+    end
 end
 
 local hitmarkerTime = 0
@@ -520,52 +507,66 @@ local espCache = {}
 local function createEsp(player)
     if espCache[player] then return end
     local drawings = {
-        Box = Drawing.new("Square"),
-        Name = Drawing.new("Text"),
-        Distance = Drawing.new("Text"),
-        Tracer = Drawing.new("Line"),
-        OofIndicator = Drawing.new("Triangle"),
-        HealthBarOutline = Drawing.new("Square"),
-        HealthBar = Drawing.new("Square"),
+        Box = safeCreateDrawing("Square"),
+        Name = safeCreateDrawing("Text"),
+        Distance = safeCreateDrawing("Text"),
+        Tracer = safeCreateDrawing("Line"),
+        OofIndicator = safeCreateDrawing("Triangle"),
+        HealthBarOutline = safeCreateDrawing("Square"),
+        HealthBar = safeCreateDrawing("Square"),
         Highlight = nil
     }
     
-    drawings.Box.Visible = false
-    drawings.Box.Thickness = 1
-    drawings.Box.Color = Config.EspColor
-    drawings.Box.Filled = false
+    if drawings.Box then
+        drawings.Box.Visible = false
+        drawings.Box.Thickness = 1
+        drawings.Box.Color = Config.EspColor
+        drawings.Box.Filled = false
+    end
     
-    drawings.Name.Visible = false
-    drawings.Name.Size = Config.EspTextSize
-    drawings.Name.Center = true
-    drawings.Name.Outline = true
-    drawings.Name.Color = Config.EspColor
+    if drawings.Name then
+        drawings.Name.Visible = false
+        drawings.Name.Size = Config.EspTextSize
+        drawings.Name.Center = true
+        drawings.Name.Outline = true
+        drawings.Name.Color = Config.EspColor
+    end
     
-    drawings.Distance.Visible = false
-    drawings.Distance.Size = Config.EspTextSize
-    drawings.Distance.Center = true
-    drawings.Distance.Outline = true
-    drawings.Distance.Color = Config.EspColor
+    if drawings.Distance then
+        drawings.Distance.Visible = false
+        drawings.Distance.Size = Config.EspTextSize
+        drawings.Distance.Center = true
+        drawings.Distance.Outline = true
+        drawings.Distance.Color = Config.EspColor
+    end
 
-    drawings.Tracer.Visible = false
-    drawings.Tracer.Thickness = 1
-    drawings.Tracer.Color = Config.EspColor
+    if drawings.Tracer then
+        drawings.Tracer.Visible = false
+        drawings.Tracer.Thickness = 1
+        drawings.Tracer.Color = Config.EspColor
+    end
 
-    drawings.OofIndicator.Visible = false
-    drawings.OofIndicator.Filled = true
-    drawings.OofIndicator.Color = Config.OofIndicatorsColor
-    drawings.OofIndicator.Thickness = 1
-    drawings.OofIndicator.Transparency = 1
+    if drawings.OofIndicator then
+        drawings.OofIndicator.Visible = false
+        drawings.OofIndicator.Filled = true
+        drawings.OofIndicator.Color = Config.OofIndicatorsColor
+        drawings.OofIndicator.Thickness = 1
+        drawings.OofIndicator.Transparency = 1
+    end
 
-    drawings.HealthBarOutline.Visible = false
-    drawings.HealthBarOutline.Thickness = 1
-    drawings.HealthBarOutline.Color = Color3.fromRGB(0, 0, 0)
-    drawings.HealthBarOutline.Filled = true
+    if drawings.HealthBarOutline then
+        drawings.HealthBarOutline.Visible = false
+        drawings.HealthBarOutline.Thickness = 1
+        drawings.HealthBarOutline.Color = Color3.fromRGB(0, 0, 0)
+        drawings.HealthBarOutline.Filled = true
+    end
 
-    drawings.HealthBar.Visible = false
-    drawings.HealthBar.Thickness = 1
-    drawings.HealthBar.Color = Color3.fromRGB(0, 255, 0)
-    drawings.HealthBar.Filled = true
+    if drawings.HealthBar then
+        drawings.HealthBar.Visible = false
+        drawings.HealthBar.Thickness = 1
+        drawings.HealthBar.Color = Color3.fromRGB(0, 255, 0)
+        drawings.HealthBar.Filled = true
+    end
     
     espCache[player] = drawings
 end
@@ -658,7 +659,7 @@ local function updateEsp()
             
             -- Out of View (OOF) Indicators Rendering Logic
             local isOffscreen = not onScreen or screenPos.Z < 0
-            if Config.OofIndicatorsEnabled and isOffscreen then
+            if Config.OofIndicatorsEnabled and isOffscreen and drawings.OofIndicator then
                 local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
                 local target2D = Vector2.new(screenPos.X, screenPos.Y)
                 
@@ -685,7 +686,7 @@ local function updateEsp()
                 drawings.OofIndicator.PointC = pointC
                 drawings.OofIndicator.Color = Config.OofIndicatorsColor
             else
-                drawings.OofIndicator.Visible = false
+                if drawings.OofIndicator then drawings.OofIndicator.Visible = false end
             end
             
             -- 2D Screen ESP Elements
@@ -704,28 +705,28 @@ local function updateEsp()
                     local boxY = topScreen.Y
                     
                     -- Box
-                    if Config.EspBoxes then
+                    if Config.EspBoxes and drawings.Box then
                         drawings.Box.Visible = true
                         drawings.Box.Size = Vector2.new(boxWidth, boxHeight)
                         drawings.Box.Position = Vector2.new(boxX, boxY)
                         drawings.Box.Color = Config.EspColor
                     else
-                        drawings.Box.Visible = false
+                        if drawings.Box then drawings.Box.Visible = false end
                     end
                     
                     -- Name
-                    if Config.EspNames then
+                    if Config.EspNames and drawings.Name then
                         drawings.Name.Visible = true
                         drawings.Name.Text = player.Name
                         drawings.Name.Position = Vector2.new(topScreen.X, boxY - Config.EspTextSize - 2)
                         drawings.Name.Color = Config.EspColor
                         drawings.Name.Size = Config.EspTextSize
                     else
-                        drawings.Name.Visible = false
+                        if drawings.Name then drawings.Name.Visible = false end
                     end
                     
                     -- Distance
-                    if Config.EspDistances then
+                    if Config.EspDistances and drawings.Distance then
                         drawings.Distance.Visible = true
                         local dist = math.floor((Camera.CFrame.Position - rpartPos).Magnitude)
                         drawings.Distance.Text = ("[%d studs]"):format(dist)
@@ -733,11 +734,11 @@ local function updateEsp()
                         drawings.Distance.Color = Config.EspColor
                         drawings.Distance.Size = Config.EspTextSize
                     else
-                        drawings.Distance.Visible = false
+                        if drawings.Distance then drawings.Distance.Visible = false end
                     end
 
                     -- Tracers / Snaplines
-                    if Config.EspTracers then
+                    if Config.EspTracers and drawings.Tracer then
                         drawings.Tracer.Visible = true
                         local origin = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
                         if Config.EspTracerOrigin == "Center" then
@@ -749,11 +750,11 @@ local function updateEsp()
                         drawings.Tracer.To = Vector2.new(screenPos.X, screenPos.Y)
                         drawings.Tracer.Color = Config.EspColor
                     else
-                        drawings.Tracer.Visible = false
+                        if drawings.Tracer then drawings.Tracer.Visible = false end
                     end
                     
                     -- Health Bar
-                    if Config.EspHealth then
+                    if Config.EspHealth and drawings.HealthBarOutline and drawings.HealthBar then
                         drawings.HealthBarOutline.Visible = true
                         drawings.HealthBarOutline.Position = Vector2.new(boxX - 6, boxY)
                         drawings.HealthBarOutline.Size = Vector2.new(4, boxHeight)
@@ -765,33 +766,33 @@ local function updateEsp()
                         drawings.HealthBar.Size = Vector2.new(2, barHeight)
                         drawings.HealthBar.Color = Color3.fromRGB(255 - (255 * healthPercent), 255 * healthPercent, 0)
                     else
-                        drawings.HealthBarOutline.Visible = false
-                        drawings.HealthBar.Visible = false
+                        if drawings.HealthBarOutline then drawings.HealthBarOutline.Visible = false end
+                        if drawings.HealthBar then drawings.HealthBar.Visible = false end
                     end
                 else
-                    drawings.Box.Visible = false
-                    drawings.Name.Visible = false
-                    drawings.Distance.Visible = false
-                    drawings.Tracer.Visible = false
-                    drawings.HealthBarOutline.Visible = false
-                    drawings.HealthBar.Visible = false
+                    if drawings.Box then drawings.Box.Visible = false end
+                    if drawings.Name then drawings.Name.Visible = false end
+                    if drawings.Distance then drawings.Distance.Visible = false end
+                    if drawings.Tracer then drawings.Tracer.Visible = false end
+                    if drawings.HealthBarOutline then drawings.HealthBarOutline.Visible = false end
+                    if drawings.HealthBar then drawings.HealthBar.Visible = false end
                 end
             else
-                drawings.Box.Visible = false
-                drawings.Name.Visible = false
-                drawings.Distance.Visible = false
-                drawings.Tracer.Visible = false
-                drawings.HealthBarOutline.Visible = false
-                drawings.HealthBar.Visible = false
+                if drawings.Box then drawings.Box.Visible = false end
+                if drawings.Name then drawings.Name.Visible = false end
+                if drawings.Distance then drawings.Distance.Visible = false end
+                if drawings.Tracer then drawings.Tracer.Visible = false end
+                if drawings.HealthBarOutline then drawings.HealthBarOutline.Visible = false end
+                if drawings.HealthBar then drawings.HealthBar.Visible = false end
             end
         else
-            drawings.Box.Visible = false
-            drawings.Name.Visible = false
-            drawings.Distance.Visible = false
-            drawings.Tracer.Visible = false
-            drawings.OofIndicator.Visible = false
-            drawings.HealthBarOutline.Visible = false
-            drawings.HealthBar.Visible = false
+            if drawings.Box then drawings.Box.Visible = false end
+            if drawings.Name then drawings.Name.Visible = false end
+            if drawings.Distance then drawings.Distance.Visible = false end
+            if drawings.Tracer then drawings.Tracer.Visible = false end
+            if drawings.OofIndicator then drawings.OofIndicator.Visible = false end
+            if drawings.HealthBarOutline then drawings.HealthBarOutline.Visible = false end
+            if drawings.HealthBar then drawings.HealthBar.Visible = false end
         end
     end
 end
@@ -800,10 +801,10 @@ Players.PlayerRemoving:Connect(removeEsp)
 
 -- Radar update
 local function updateRadar()
-    if not Config.RadarHackEnabled or not Camera then
-        radarOuter.Visible = false
-        radarCenter.Visible = false
-        radarHeading.Visible = false
+    if not Config.RadarHackEnabled or not Camera or not radarOuter then
+        if radarOuter then radarOuter.Visible = false end
+        if radarCenter then radarCenter.Visible = false end
+        if radarHeading then radarHeading.Visible = false end
         for _, dot in pairs(radarDots) do dot.Visible = false end
         return
     end
@@ -842,14 +843,18 @@ local function updateRadar()
             if localOffset.Magnitude <= Config.RadarSize then
                 local dot = radarDots[player]
                 if not dot then
-                    dot = Drawing.new("Circle")
-                    dot.Radius = 4
-                    dot.Filled = true
-                    dot.Color = Color3.fromRGB(250, 50, 50)
-                    radarDots[player] = dot
+                    dot = safeCreateDrawing("Circle")
+                    if dot then
+                        dot.Radius = 4
+                        dot.Filled = true
+                        dot.Color = Color3.fromRGB(250, 50, 50)
+                        radarDots[player] = dot
+                    end
                 end
-                dot.Visible = true
-                dot.Position = screenCenter + localOffset
+                if dot then
+                    dot.Visible = true
+                    dot.Position = screenCenter + localOffset
+                end
             else
                 if radarDots[player] then radarDots[player].Visible = false end
             end
@@ -984,24 +989,28 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
--- Render Loop Updates
+-- Render Loop Updates & FPS Calculations
 local cachedClosestPart = nil
 local lastTarget = nil
 local lockStartTime = 0
 local reactionTargetTime = 0
+local lastFpsTime = tick()
 
 RunService.RenderStepped:Connect(function()
     cachedClosestPart = getClosestPlayer()
     updateEsp()
     applyLightingSettings()
     
-    -- Performance Metrics Calculations
-    local fps = math.floor(1 / RunService.RenderStepped:Wait())
+    -- Delta Time Frame Metering (Non-blocking calculation)
+    local now = tick()
+    local dt = now - lastFpsTime
+    lastFpsTime = now
+    local fps = dt > 0 and math.floor(1 / dt) or 0
     local ping = math.floor(statsInstance.Network.ServerStatsItem["Data Ping"]:GetValue())
     local mem = math.floor(gcinfo())
 
     -- Watermark & Performance Rendering
-    if Config.WatermarkEnabled then
+    if Config.WatermarkEnabled and watermarkText and watermarkBg then
         watermarkText.Text = " " .. Config.WatermarkText .. " | Live "
         watermarkText.Position = Vector2.new(15, 20)
         watermarkText.Visible = true
@@ -1009,11 +1018,11 @@ RunService.RenderStepped:Connect(function()
         watermarkBg.Size = Vector2.new(watermarkText.TextBounds.X + 10, watermarkText.TextBounds.Y + 10)
         watermarkBg.Visible = true
     else
-        watermarkText.Visible = false
-        watermarkBg.Visible = false
+        if watermarkText then watermarkText.Visible = false end
+        if watermarkBg then watermarkBg.Visible = false end
     end
 
-    if Config.PerfMonitorEnabled then
+    if Config.PerfMonitorEnabled and perfText and perfBg then
         perfText.Text = string.format(" FPS: %d | Ping: %dms | Mem: %dMB", fps, ping, mem)
         perfText.Position = Vector2.new(15, 60)
         perfText.Visible = true
@@ -1021,8 +1030,8 @@ RunService.RenderStepped:Connect(function()
         perfBg.Size = Vector2.new(perfText.TextBounds.X + 10, perfText.TextBounds.Y + 10)
         perfBg.Visible = true
     else
-        perfText.Visible = false
-        perfBg.Visible = false
+        if perfText then perfText.Visible = false end
+        if perfBg then perfBg.Visible = false end
     end
 
     -- Hitmarker crosshair lines updater
@@ -1031,21 +1040,29 @@ RunService.RenderStepped:Connect(function()
         local gap = 4
         local len = 8
         
-        hitmarkerLines[1].From = center - Vector2.new(gap, gap)
-        hitmarkerLines[1].To = center - Vector2.new(gap + len, gap + len)
-        hitmarkerLines[1].Visible = true
+        if hitmarkerLines[1] then
+            hitmarkerLines[1].From = center - Vector2.new(gap, gap)
+            hitmarkerLines[1].To = center - Vector2.new(gap + len, gap + len)
+            hitmarkerLines[1].Visible = true
+        end
         
-        hitmarkerLines[2].From = center + Vector2.new(gap, -gap)
-        hitmarkerLines[2].To = center + Vector2.new(gap + len, -(gap + len))
-        hitmarkerLines[2].Visible = true
+        if hitmarkerLines[2] then
+            hitmarkerLines[2].From = center + Vector2.new(gap, -gap)
+            hitmarkerLines[2].To = center + Vector2.new(gap + len, -(gap + len))
+            hitmarkerLines[2].Visible = true
+        end
         
-        hitmarkerLines[3].From = center + Vector2.new(-gap, gap)
-        hitmarkerLines[3].To = center + Vector2.new(-(gap + len), gap + len)
-        hitmarkerLines[3].Visible = true
+        if hitmarkerLines[3] then
+            hitmarkerLines[3].From = center + Vector2.new(-gap, gap)
+            hitmarkerLines[3].To = center + Vector2.new(-(gap + len), gap + len)
+            hitmarkerLines[3].Visible = true
+        end
         
-        hitmarkerLines[4].From = center + Vector2.new(gap, gap)
-        hitmarkerLines[4].To = center + Vector2.new(gap + len, gap + len)
-        hitmarkerLines[4].Visible = true
+        if hitmarkerLines[4] then
+            hitmarkerLines[4].From = center + Vector2.new(gap, gap)
+            hitmarkerLines[4].To = center + Vector2.new(gap + len, gap + len)
+            hitmarkerLines[4].Visible = true
+        end
     else
         for _, l in ipairs(hitmarkerLines) do l.Visible = false end
     end
@@ -1173,7 +1190,7 @@ RunService.RenderStepped:Connect(function()
     end
 
     -- FOV circle drawing anims
-    if Config.FOVEnabled then
+    if Config.FOVEnabled and fovCircle then
         local radius = Config.FOVRadius
         if Config.FovAnimated then
             radius = radius + math.sin(tick() * Config.FovAnimationSpeed) * Config.FovAnimationAmplitude
@@ -1187,11 +1204,11 @@ RunService.RenderStepped:Connect(function()
         fovCircle.Filled = Config.FOVFilled
         fovCircle.Transparency = Config.FOVTransparency
     else
-        fovCircle.Visible = false
+        if fovCircle then fovCircle.Visible = false end
     end
 
     -- Target indicator
-    if Config.ShowTargetIndicator and cachedClosestPart then
+    if Config.ShowTargetIndicator and cachedClosestPart and targetBox then
         local pos, onScreen = getPositionOnScreen(cachedClosestPart.Position)
         if onScreen then
             targetBox.Visible = true
@@ -1202,11 +1219,11 @@ RunService.RenderStepped:Connect(function()
             targetBox.Visible = false
         end
     else
-        targetBox.Visible = false
+        if targetBox then targetBox.Visible = false end
     end
 
     -- Silent Aim target visualizer
-    if Config.SilentVisualizerEnabled and Config.SilentAimEnabled and cachedClosestPart then
+    if Config.SilentVisualizerEnabled and Config.SilentAimEnabled and cachedClosestPart and silentVisualizer then
         local targetPos = cachedClosestPart.Position
         if Config.Prediction and cachedClosestPart.Velocity then
             targetPos = targetPos + cachedClosestPart.Velocity * Config.PredictionAmount
@@ -1222,17 +1239,20 @@ RunService.RenderStepped:Connect(function()
             silentVisualizer.Visible = false
         end
     else
-        silentVisualizer.Visible = false
+        if silentVisualizer then silentVisualizer.Visible = false end
     end
 
     updateRadar()
 end)
 
--- Safe UI API Wrappers to dynamically adjust across Syde updates & Prevent any Nil value crashes
+-- Safe UI API Wrappers to dynamically adjust across Syde updates & Warn UI Errors
 local function addToggle(tab, title, description, defaultValue, flag, callback)
     if not tab then return nil end
     local method = tab.Toggle or tab.AddToggle or tab.CreateToggle
-    if not method then return nil end
+    if not method then 
+        warn("[Syde UI error] " .. tostring(title) .. ": Toggle method not found")
+        return nil 
+    end
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1243,14 +1263,20 @@ local function addToggle(tab, title, description, defaultValue, flag, callback)
             CallBack = callback
         })
     end)
-    return success and result or nil
+    if not success then
+        warn("[Syde UI error] " .. tostring(title) .. ": " .. tostring(result))
+        return nil
+    end
+    return result
 end
 
 local function addSliders(tab, title, description, slidersData)
     if not tab then return nil end
     local method = tab.CreateSlider or tab.Slider or tab.AddSlider or tab.SliderGroup or tab.CreateSliders
-    if not method then return nil end
-    
+    if not method then 
+        warn("[Syde UI error] " .. tostring(title) .. ": Slider method not found")
+        return nil 
+    end
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1259,32 +1285,20 @@ local function addSliders(tab, title, description, slidersData)
         })
     end)
     
-    if success then return result end
-    
-    -- Fallback: If CreateSlider failed (e.g. singular Slider API), add them individually
-    for _, s in ipairs(slidersData) do
-        local singleMethod = tab.Slider or tab.AddSlider or tab.CreateSlider
-        if singleMethod then
-            pcall(function()
-                singleMethod(tab, {
-                    Title = s.Title,
-                    Description = description or "",
-                    Range = s.Range,
-                    Increment = s.Increment,
-                    StarterValue = s.StarterValue,
-                    Flag = s.Flag,
-                    CallBack = s.CallBack
-                })
-            end)
-        end
+    if not success then
+        warn("[Syde UI error] " .. tostring(title) .. ": " .. tostring(result))
+        return nil
     end
-    return nil
+    return result
 end
 
 local function addDropdown(tab, title, options, placeholder, multi, callback)
     if not tab then return nil end
     local method = tab.Dropdown or tab.AddDropdown or tab.CreateDropdown
-    if not method then return nil end
+    if not method then 
+        warn("[Syde UI error] " .. tostring(title) .. ": Dropdown method not found")
+        return nil 
+    end
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1294,13 +1308,20 @@ local function addDropdown(tab, title, options, placeholder, multi, callback)
             CallBack = callback
         })
     end)
-    return success and result or nil
+    if not success then
+        warn("[Syde UI error] " .. tostring(title) .. ": " .. tostring(result))
+        return nil
+    end
+    return result
 end
 
 local function addColorPicker(tab, title, description, defaultColor, flag, callback)
     if not tab then return nil end
     local method = tab.ColorPicker or tab.AddColorPicker or tab.CreateColorPicker
-    if not method then return nil end
+    if not method then 
+        warn("[Syde UI error] " .. tostring(title) .. ": ColorPicker method not found")
+        return nil 
+    end
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1311,13 +1332,20 @@ local function addColorPicker(tab, title, description, defaultColor, flag, callb
             CallBack = callback
         })
     end)
-    return success and result or nil
+    if not success then
+        warn("[Syde UI error] " .. tostring(title) .. ": " .. tostring(result))
+        return nil
+    end
+    return result
 end
 
 local function addTextInput(tab, title, placeholder, maxSize, callback)
     if not tab then return nil end
     local method = tab.TextInput or tab.AddTextInput or tab.CreateTextInput or tab.Input
-    if not method then return nil end
+    if not method then 
+        warn("[Syde UI error] " .. tostring(title) .. ": TextInput method not found")
+        return nil 
+    end
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1326,13 +1354,20 @@ local function addTextInput(tab, title, placeholder, maxSize, callback)
             CallBack = callback
         })
     end)
-    return success and result or nil
+    if not success then
+        warn("[Syde UI error] " .. tostring(title) .. ": " .. tostring(result))
+        return nil
+    end
+    return result
 end
 
 local function addButton(tab, title, description, callback)
     if not tab then return nil end
     local method = tab.Button or tab.AddButton or tab.CreateButton
-    if not method then return nil end
+    if not method then 
+        warn("[Syde UI error] " .. tostring(title) .. ": Button method not found")
+        return nil 
+    end
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1341,13 +1376,20 @@ local function addButton(tab, title, description, callback)
             CallBack = callback
         })
     end)
-    return success and result or nil
+    if not success then
+        warn("[Syde UI error] " .. tostring(title) .. ": " .. tostring(result))
+        return nil
+    end
+    return result
 end
 
 local function addKeybind(tab, title, key, callback)
     if not tab then return nil end
     local method = tab.Keybind or tab.AddKeybind or tab.CreateKeybind
-    if not method then return nil end
+    if not method then 
+        warn("[Syde UI error] " .. tostring(title) .. ": Keybind method not found")
+        return nil 
+    end
     local success, result = pcall(function()
         return method(tab, {
             Title = title,
@@ -1355,30 +1397,48 @@ local function addKeybind(tab, title, key, callback)
             CallBack = callback
         })
     end)
-    return success and result or nil
+    if not success then
+        warn("[Syde UI error] " .. tostring(title) .. ": " .. tostring(result))
+        return nil
+    end
+    return result
 end
 
 local function addSection(tab, title, icon)
     if not tab then return nil end
     local method = tab.Section or tab.AddSection or tab.CreateSection
-    if not method then return nil end
+    if not method then 
+        warn("[Syde UI error] " .. tostring(title) .. ": Section method not found")
+        return nil 
+    end
     local success, result = pcall(function()
         return method(tab, title, icon)
     end)
-    return success and result or nil
+    if not success then
+        warn("[Syde UI error] " .. tostring(title) .. ": " .. tostring(result))
+        return nil
+    end
+    return result
 end
 
--- Main Syde Interface Initialization (Tabs require String arguments only!)
+-- Main Syde Interface Initialization
 local Window = syde:Init({
-    Title = "Adaptive Aimbot",
+    Title = "Adaptive UI",
     SubText = "Universal Premium UI Framework"
 })
+assert(Window, "Syde failed to initialize Window")
 
-local CombatTab = Window:InitTab("Combat")
-local VisualsTab = Window:InitTab("Visuals")
-local MovementTab = Window:InitTab("Movement")
-local WorldTab = Window:InitTab("World")
-local SettingsTab = Window:InitTab("Settings")
+local function requireTab(tab, name)
+    assert(tab, "Syde failed to create tab: " .. name)
+    return tab
+end
+
+-- Corrected table-based Tab Initialization calls
+local CombatTab = requireTab(Window:InitTab({ Title = "Combat" }), "Combat")
+local VisualsTab = requireTab(Window:InitTab({ Title = "Visuals" }), "Visuals")
+local MovementTab = requireTab(Window:InitTab({ Title = "Movement" }), "Movement")
+local WorldTab = requireTab(Window:InitTab({ Title = "World" }), "World")
+local SettingsTab = requireTab(Window:InitTab({ Title = "Settings" }), "Settings")
 
 -- ==========================================
 -- COMBAT TAB
@@ -1470,7 +1530,7 @@ addSliders(CombatTab, "AA Rotation Speeds", "Manages yaw customization limits.",
 })
 
 -- ==========================================
--- VISUALS TAB (Proper Variable scoping - VisualsTab used exclusively)
+-- VISUALS TAB
 -- ==========================================
 addSection(VisualsTab, "ESP Rendering Elements")
 addToggle(VisualsTab, "Master ESP Toggle", "Render drawing frames around other active entities.", Config.EspEnabled, "EspEnabled", function(v) Config.EspEnabled = v end)
@@ -1574,6 +1634,11 @@ addSection(VisualsTab, "Feedback Overlays")
 addToggle(VisualsTab, "Floating Damage Indicators", "Floats calculated deal-damage numbers in real-time.", Config.DamageIndicators, "DamageIndicators", function(v) Config.DamageIndicators = v end)
 addToggle(VisualsTab, "Enable Hitmarkers", "Renders diagonal crosshair lines upon hits.", Config.HitMarkers, "HitMarkers", function(v) Config.HitMarkers = v end)
 addToggle(VisualsTab, "Play Hitmarker Sound", "Play classical FPS hit crunches.", Config.HitSoundEnabled, "HitSoundEnabled", function(v) Config.HitSoundEnabled = v end)
+
+VisualsTab:Paragraph({
+    Title = "UI Test",
+    Content = "If this appears, tabs are working."
+})
 
 -- ==========================================
 -- MOVEMENT TAB
@@ -1710,10 +1775,33 @@ SettingsTab:Paragraph({
     Content = "Clean modular optimization with customized Syde integrations."
 })
 
--- Initialize
-cachedClosestPart = getClosestPlayer()
-applyLightingSettings()
+-- Initialize Core Features Safely (Executed after UI compilation completes)
+task.spawn(function()
+    task.wait(0.5) -- Safe structural rendering buffer
+    
+    local success, err = pcall(function()
+        cachedClosestPart = getClosestPlayer()
+        applyLightingSettings()
+        
+        -- Auto Load Last Configuration File
+        local LAST_CONFIG_FILE = "AdaptiveAimbot_LastConfig.txt"
+        if isFileSystemSupported and isfile(LAST_CONFIG_FILE) then
+            local lastConfigName = readfile(LAST_CONFIG_FILE)
+            if lastConfigName and lastConfigName ~= "" then
+                loadConfig(lastConfigName)
+            end
+        end
+    end)
+    
+    if not success then
+        warn("[Adaptive Aimbot Runtime Error] Initialization loop failed: " .. tostring(err))
+    end
+end)
 
-notify("Framework Loaded", "Aimbot setup completed.", 3)
+syde:Notify({
+    Title = "UI Loaded",
+    Content = "Syde tabs initialized correctly.",
+    Duration = 3
+})
 
 syde:LoadSaveConfig()
